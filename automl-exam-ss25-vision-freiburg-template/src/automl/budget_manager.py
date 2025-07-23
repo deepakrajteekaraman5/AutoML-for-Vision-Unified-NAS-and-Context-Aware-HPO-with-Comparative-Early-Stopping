@@ -322,7 +322,7 @@ class BudgetManager:
         self.reallocation_history.append(reallocation_event)
     
     def should_start_final_training(self) -> bool:
-        """Check if we should transition to final training phase"""
+        """Check if we should transition to final training phase - FIXED VERSION"""
         with self._lock:
             if self.current_phase != ExecutionPhase.ARCHITECTURE_SEARCH:
                 return False
@@ -331,16 +331,20 @@ class BudgetManager:
             elapsed_hours = self.get_elapsed_time_hours()
             search_phase_complete = elapsed_hours >= self.architecture_search_hours
             
-            # Check if all architectures are done
-            active_count = sum(1 for alloc in self.resource_allocations.values() if alloc.is_active)
-            all_architectures_done = active_count == 0
+            # FIXED: Check if all architectures are done properly
+            # Count architectures that have actually been processed (have results or were stopped)
+            processed_count = len(self.completed_architectures) + len(self.stopped_architectures)
+            total_architectures = len(self.resource_allocations)
+            
+            # Only consider "all done" if we've actually processed all architectures
+            all_architectures_done = (processed_count >= total_architectures) and (total_architectures > 0)
             
             should_transition = search_phase_complete or all_architectures_done
             
             if should_transition:
                 self.logger.info(f"Transitioning to final training phase:")
                 self.logger.info(f"  Time condition: {elapsed_hours:.2f}h >= {self.architecture_search_hours:.2f}h ({search_phase_complete})")
-                self.logger.info(f"  All done condition: {all_architectures_done}")
+                self.logger.info(f"  All done condition: {processed_count}/{total_architectures} processed ({all_architectures_done})")
             
             return should_transition
     

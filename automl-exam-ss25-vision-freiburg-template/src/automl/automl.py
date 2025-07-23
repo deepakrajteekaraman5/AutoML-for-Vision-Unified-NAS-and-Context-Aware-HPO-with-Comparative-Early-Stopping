@@ -78,7 +78,7 @@ class AutoMLPipeline:
             Dictionary containing comprehensive results
         """
         
-        self.logger.info("🚀 Starting AutoML Pipeline Execution")
+        self.logger.info("Starting AutoML Pipeline Execution")
         pipeline_start_time = time.time()
         
         try:
@@ -107,12 +107,12 @@ class AutoMLPipeline:
                 self._save_results(comprehensive_results)
             
             total_time = time.time() - pipeline_start_time
-            self.logger.info(f"🎉 AutoML Pipeline completed in {total_time/3600:.2f} hours")
+            self.logger.info(f"AutoML Pipeline completed in {total_time/3600:.2f} hours")
             
             return comprehensive_results
             
         except Exception as e:
-            self.logger.error(f"💥 Pipeline failed: {e}")
+            self.logger.error(f"Pipeline failed: {e}")
             import traceback
             traceback.print_exc()
             raise
@@ -129,7 +129,7 @@ class AutoMLPipeline:
             
             # Log dataset characteristics
             characteristics = dataset_info['characteristics']
-            self.logger.info(f"📊 Dataset Analysis Complete:")
+            self.logger.info(f"Dataset Analysis Complete:")
             self.logger.info(f"  Name: {characteristics['name']}")
             self.logger.info(f"  Samples: {characteristics['num_samples']:,}")
             self.logger.info(f"  Classes: {characteristics['num_classes']}")
@@ -164,7 +164,7 @@ class AutoMLPipeline:
             else:
                 selected_architectures = architectures
             
-            self.logger.info(f"🏗️ Selected architectures: {selected_architectures}")
+            self.logger.info(f"Selected architectures: {selected_architectures}")
             
             # Register architectures with early stopping engine
             for arch in selected_architectures:
@@ -185,11 +185,11 @@ class AutoMLPipeline:
         return selected_architectures
     
     def _phase3_architecture_search(self, architectures: List[str]) -> Dict[str, Any]:
-        """Phase 3: Run architecture search with intelligent HPO"""
+        """Phase 3: Run architecture search with intelligent HPO - FIXED VERSION"""
         
         with Timer("Architecture search") as timer:
             # Create data loaders (will be reused for all architectures)
-            self.logger.info("📦 Creating data loaders...")
+            self.logger.info("Creating data loaders...")
             train_loader, val_loader, test_loader = self.data_manager.get_dataloaders(
                 batch_size=None,  # Will use recommended batch size
                 image_size=None,  # Will use dataset's native size
@@ -211,77 +211,75 @@ class AutoMLPipeline:
             
             # Architecture search results
             architecture_results = {}
-            active_architectures = architectures.copy()
             
-            # Main architecture search loop
-            while active_architectures and not self.budget_manager.should_start_final_training():
-                self.logger.info(f"🔍 Active architectures: {active_architectures}")
+            # FIXED: Process each architecture sequentially
+            for arch_name in architectures:
+                self.logger.info(f"Processing architecture: {arch_name}")
                 
-                for arch_name in active_architectures.copy():
-                    # Check if architecture can start training
-                    if not self.budget_manager.start_architecture_training(arch_name):
-                        self.logger.warning(f"Cannot start training {arch_name} - resource constraints")
-                        continue
-                    
-                    self.logger.info(f"🏃 Starting HPO for {arch_name}")
-                    
-                    # Get architecture characteristics for HPO selection
-                    arch_characteristics = self.model_factory.get_model_characteristics(arch_name)
-                    dataset_complexity = self.dataset_info['characteristics']['complexity_score']
-                    available_time = self.budget_manager.get_phase_remaining_time_hours()
-                    
-                    # Create objective function for this architecture
-                    objective_function = self.trainer.create_objective_function(
-                        arch_name, train_loader, val_loader, self.model_factory,
-                        early_stopping_engine=self.early_stopping,
-                        budget_manager=self.budget_manager
+                # Check if we should transition to final training before processing more architectures
+                if self.budget_manager.should_start_final_training():
+                    self.logger.info("Time budget reached, transitioning to final training")
+                    break
+                
+                # Check if architecture can start training
+                if not self.budget_manager.start_architecture_training(arch_name):
+                    self.logger.warning(f"Cannot start training {arch_name} - resource constraints")
+                    continue
+                
+                self.logger.info(f"Starting HPO for {arch_name}")
+                
+                # Get architecture characteristics for HPO selection
+                arch_characteristics = self.model_factory.get_model_characteristics(arch_name)
+                dataset_complexity = self.dataset_info['characteristics']['complexity_score']
+                available_time = self.budget_manager.get_phase_remaining_time_hours()
+                
+                # Create objective function for this architecture
+                objective_function = self.trainer.create_objective_function(
+                    arch_name, train_loader, val_loader, self.model_factory,
+                    early_stopping_engine=self.early_stopping,
+                    budget_manager=self.budget_manager
+                )
+                
+                # Run HPO for this architecture
+                hpo_result = self.hpo_selector.optimize_hyperparameters(
+                    arch_name,
+                    objective_function,
+                    search_space,
+                    arch_characteristics,
+                    dataset_complexity,
+                    available_time
+                )
+                
+                # Store results
+                architecture_results[arch_name] = hpo_result
+                self.budget_manager.completed_architectures.add(arch_name)
+
+                self.logger.info(f"HPO completed for {arch_name}:")
+                self.logger.info(f"  Best score: {hpo_result.best_score:.4f}")
+                self.logger.info(f"  Best params: {hpo_result.best_params}")
+                self.logger.info(f"  Method used: {hpo_result.method_used.value}")
+                self.logger.info(f"  Trials completed: {hpo_result.n_trials_completed}")
+                
+                # Check for early stopping
+                should_stop, reason, confidence = self.early_stopping.should_stop_architecture(arch_name)
+                if should_stop:
+                    self.early_stopping.stop_architecture(arch_name, reason, confidence)
+                    freed_time = self.budget_manager.architecture_stopped_early(
+                        arch_name, reason.value, hpo_result.best_score
                     )
                     
-                    # Run HPO for this architecture
-                    hpo_result = self.hpo_selector.optimize_hyperparameters(
-                        arch_name,
-                        objective_function,
-                        search_space,
-                        arch_characteristics,
-                        dataset_complexity,
-                        available_time
-                    )
+                    self.decision_log.append({
+                        'type': 'early_stopping',
+                        'architecture': arch_name,
+                        'reason': reason.value,
+                        'confidence': confidence,
+                        'freed_time_hours': freed_time
+                    })
                     
-                    # Store results
-                    architecture_results[arch_name] = hpo_result
-                    
-                    self.logger.info(f"✅ {arch_name} HPO completed:")
-                    self.logger.info(f"  Best score: {hpo_result.best_score:.4f}")
-                    self.logger.info(f"  Best params: {hpo_result.best_params}")
-                    self.logger.info(f"  Method used: {hpo_result.method_used.value}")
-                    self.logger.info(f"  Trials completed: {hpo_result.n_trials_completed}")
-                    
-                    # Check for early stopping
-                    should_stop, reason, confidence = self.early_stopping.should_stop_architecture(arch_name)
-                    if should_stop:
-                        self.early_stopping.stop_architecture(arch_name, reason, confidence)
-                        freed_time = self.budget_manager.architecture_stopped_early(
-                            arch_name, reason.value, hpo_result.best_score
-                        )
-                        active_architectures.remove(arch_name)
-                        
-                        self.decision_log.append({
-                            'type': 'early_stopping',
-                            'architecture': arch_name,
-                            'reason': reason.value,
-                            'confidence': confidence,
-                            'freed_time_hours': freed_time
-                        })
-                        
-                        self.logger.info(f"🛑 Stopped {arch_name} early: {reason.value}")
-                    
-                    # Print current budget status
-                    self.budget_manager.print_budget_status()
-                    
-                    # Break if time budget is approaching
-                    if self.budget_manager.should_start_final_training():
-                        self.logger.info("⏰ Time to transition to final training")
-                        break
+                    self.logger.info(f"Stopped {arch_name} early: {reason.value}")
+                
+                # Print current budget status
+                self.budget_manager.print_budget_status()
             
             self.execution_log.append({
                 'phase': 'architecture_search',
@@ -304,10 +302,10 @@ class AutoMLPipeline:
             final_candidates = self.budget_manager.start_final_training_phase()
             
             if not final_candidates:
-                self.logger.warning("⚠️ No candidates selected for final training")
+                self.logger.warning("No candidates selected for final training")
                 return {}
             
-            self.logger.info(f"🎯 Final training candidates: {final_candidates}")
+            self.logger.info(f"Final training candidates: {final_candidates}")
             
             final_results = {}
             best_overall_score = 0.0
@@ -318,7 +316,7 @@ class AutoMLPipeline:
                     self.logger.warning(f"No HPO results for {arch_name}, skipping final training")
                     continue
                 
-                self.logger.info(f"🚀 Final training for {arch_name}")
+                self.logger.info(f"Final training for {arch_name}")
                 
                 # Get best hyperparameters from HPO
                 hpo_result = self.architecture_results[arch_name]
@@ -350,17 +348,32 @@ class AutoMLPipeline:
                         'results': training_results
                     }
                 
-                self.logger.info(f"✅ {arch_name} final training completed:")
+                self.logger.info(f"{arch_name} final training completed:")
                 self.logger.info(f"  Test accuracy: {test_accuracy:.4f}")
                 self.logger.info(f"  Best val accuracy: {training_results['best_val_accuracy']:.4f}")
             
-            # Store best model
+            # Store best model - FIXED: Proper structure
             if best_model_info:
                 self.final_model = best_model_info['model']
-                self.final_results = best_model_info['results']
+                self.final_results = {
+                    'best_model': {
+                        'architecture': best_model_info['architecture'],
+                        'model': best_model_info['model'],
+                        'results': best_model_info['results']
+                    }
+                }
                 
-                self.logger.info(f"🏆 Best overall model: {best_model_info['architecture']}")
-                self.logger.info(f"🎯 Best test accuracy: {best_overall_score:.4f}")
+                self.logger.info(f"Best overall model: {best_model_info['architecture']}")
+                self.logger.info(f"Best test accuracy: {best_overall_score:.4f}")
+            else:
+                # FIXED: Ensure structure exists even if no models trained
+                self.final_results = {
+                    'best_model': {
+                        'architecture': None,
+                        'model': None,
+                        'results': None
+                    }
+                }
             
             self.execution_log.append({
                 'phase': 'final_training',
@@ -398,10 +411,18 @@ class AutoMLPipeline:
                 },
                 'final_training_results': final_results,
                 'best_model': {
-                    'architecture': self.final_results['architecture_name'] if self.final_results else None,
-                    'test_accuracy': self.final_results['test_results']['test_accuracy'] if self.final_results else 0.0,
-                    'hyperparameters': self.final_results['best_hyperparameters'] if self.final_results else {},
-                } if self.final_results else {},
+                    'architecture': self.final_results.get('best_model', {}).get('architecture'),
+                    'test_accuracy': (
+                        self.final_results.get('best_model', {}).get('results', {}).get('test_results', {}).get('test_accuracy', 0.0)
+                        if self.final_results and self.final_results.get('best_model', {}).get('results')
+                        else 0.0
+                    ),
+                    'hyperparameters': (
+                        self.final_results.get('best_model', {}).get('results', {}).get('best_hyperparameters', {})
+                        if self.final_results and self.final_results.get('best_model', {}).get('results')
+                        else {}
+                    ),
+                } if self.final_results else {'architecture': None, 'test_accuracy': 0.0, 'hyperparameters': {}},
                 'budget_summary': self.budget_manager.get_budget_summary(),
                 'early_stopping_summary': self.early_stopping.get_performance_summary(),
                 'hpo_method_performance': self.hpo_selector.get_method_performance_summary(),
@@ -453,11 +474,12 @@ class AutoMLPipeline:
         }
         
         # Dataset insights
-        complexity = self.dataset_info['characteristics']['complexity_score']
-        if complexity < 3.0:
-            insights['dataset_insights'].append("Low complexity dataset - simpler models may be sufficient")
-        elif complexity > 7.0:
-            insights['dataset_insights'].append("High complexity dataset - sophisticated models recommended")
+        if self.dataset_info:
+            complexity = self.dataset_info['characteristics']['complexity_score']
+            if complexity < 3.0:
+                insights['dataset_insights'].append("Low complexity dataset - simpler models may be sufficient")
+            elif complexity > 7.0:
+                insights['dataset_insights'].append("High complexity dataset - sophisticated models recommended")
         
         # Architecture insights
         if self.architecture_results:
@@ -476,49 +498,64 @@ class AutoMLPipeline:
         return insights
     
     def _print_final_summary(self, results: Dict[str, Any]):
-        """Print comprehensive final summary"""
+        """Print comprehensive final summary - FIXED VERSION"""
         
         print("\n" + "="*80)
-        print("🎉 AUTOML PIPELINE EXECUTION COMPLETED")
+        print("AUTOML PIPELINE EXECUTION COMPLETED")
         print("="*80)
         
         # Basic info
         config = results['pipeline_config']
-        print(f"📊 Dataset: {config['dataset_name']}")
-        print(f"⏱️  Total execution time: {config['total_execution_time_hours']:.2f} hours")
-        print(f"🏗️  Architectures evaluated: {len(config['architectures_evaluated'])}")
+        print(f"Dataset: {config['dataset_name']}")
+        print(f"Total execution time: {config['total_execution_time_hours']:.2f} hours")
+        print(f"Architectures evaluated: {len(config['architectures_evaluated'])}")
         
-        # Best results
-        if results['best_model']['architecture']:
-            print(f"\n🏆 BEST MODEL RESULTS:")
-            print(f"   Architecture: {results['best_model']['architecture']}")
-            print(f"   Test Accuracy: {results['best_model']['test_accuracy']:.4f}")
-            print(f"   Hyperparameters: {results['best_model']['hyperparameters']}")
+        # FIXED: Safe access to best model results
+        best_model = results.get('best_model', {})
+        if best_model and best_model.get('architecture'):
+            print(f"\nBEST MODEL RESULTS:")
+            print(f"   Architecture: {best_model['architecture']}")
+            print(f"   Test Accuracy: {best_model.get('test_accuracy', 0):.4f}")
+            print(f"   Hyperparameters: {best_model.get('hyperparameters', {})}")
+        else:
+            print(f"\nNO MODELS COMPLETED TRAINING")
+            print(f"   Reason: Pipeline stopped before any architecture finished HPO")
         
-        # Architecture comparison
-        print(f"\n📈 ARCHITECTURE COMPARISON:")
-        for arch, result in results['architecture_search_results'].items():
-            print(f"   {arch:20} | Score: {result['best_score']:.4f} | "
-                  f"HPO: {result['hpo_method_used']:15} | Trials: {result['trials_completed']:3}")
+        # Architecture comparison - only if we have results
+        arch_results = results.get('architecture_search_results', {})
+        if arch_results:
+            print(f"\nARCHITECTURE COMPARISON:")
+            for arch, result in arch_results.items():
+                print(f"   {arch:20} | Score: {result['best_score']:.4f} | "
+                      f"HPO: {result['hpo_method_used']:15} | Trials: {result['trials_completed']:3}")
+        else:
+            print(f"\nARCHITECTURE COMPARISON: No architectures completed")
         
         # Budget utilization
-        budget = results['budget_summary']
-        print(f"\n💰 BUDGET UTILIZATION:")
-        print(f"   Time used: {budget['execution_status']['elapsed_hours']:.1f}h / "
-              f"{budget['phase_breakdown']['total_budget_hours']:.1f}h "
-              f"({budget['execution_status']['budget_utilization']*100:.1f}%)")
-        print(f"   Reallocations: {budget['performance_metrics']['total_reallocations']}")
+        budget = results.get('budget_summary', {})
+        if budget:
+            exec_status = budget.get('execution_status', {})
+            phase_breakdown = budget.get('phase_breakdown', {})
+            print(f"\nBUDGET UTILIZATION:")
+            print(f"   Time used: {exec_status.get('elapsed_hours', 0):.1f}h / "
+                  f"{phase_breakdown.get('total_budget_hours', 24):.1f}h "
+                  f"({exec_status.get('budget_utilization', 0)*100:.1f}%)")
+            
+            perf_metrics = budget.get('performance_metrics', {})
+            print(f"   Reallocations: {perf_metrics.get('total_reallocations', 0)}")
         
         # Early stopping summary
-        es_summary = results['early_stopping_summary']
-        print(f"\n🛑 EARLY STOPPING SUMMARY:")
-        print(f"   Active architectures: {len(es_summary['active_architectures'])}")
-        print(f"   Stopped architectures: {len(es_summary['stopped_architectures'])}")
+        es_summary = results.get('early_stopping_summary', {})
+        if es_summary:
+            print(f"\nEARLY STOPPING SUMMARY:")
+            print(f"   Active architectures: {len(es_summary.get('active_architectures', []))}")
+            print(f"   Stopped architectures: {len(es_summary.get('stopped_architectures', []))}")
         
         # Insights
-        if 'insights' in results:
-            print(f"\n💡 KEY INSIGHTS:")
-            for insight in results['insights']['recommendations']:
+        insights = results.get('insights', {})
+        if insights and insights.get('recommendations'):
+            print(f"\nKEY INSIGHTS:")
+            for insight in insights['recommendations']:
                 print(f"   • {insight}")
         
         print("="*80)
@@ -540,7 +577,7 @@ class AutoMLPipeline:
         with open(results_file, 'w') as f:
             json.dump(serializable_results, f, indent=2)
         
-        self.logger.info(f"💾 Results saved to {results_file}")
+        self.logger.info(f"Results saved to {results_file}")
         
         # Save final model separately if available
         if self.final_model is not None:
@@ -550,7 +587,7 @@ class AutoMLPipeline:
                 'results': self.final_results,
                 'config': self.config.config
             }, model_file)
-            self.logger.info(f"💾 Best model saved to {model_file}")
+            self.logger.info(f"Best model saved to {model_file}")
     
     def _make_json_serializable(self, obj):
         """Convert object to JSON serializable format"""

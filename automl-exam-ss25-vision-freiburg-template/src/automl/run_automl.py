@@ -1,4 +1,4 @@
-# experiments/run_automl.py
+# src/automl/run_automl.py
 """
 Main execution script for AutoML Pipeline
 Entry point for running the complete AutoML system
@@ -10,9 +10,26 @@ import os
 from pathlib import Path
 import logging
 
+# FIXED: Unicode encoding setup for Windows
+if sys.platform.startswith('win'):
+    # Set console encoding to UTF-8
+    if hasattr(sys.stdout, 'reconfigure'):
+        try:
+            sys.stdout.reconfigure(encoding='utf-8')
+        except:
+            pass
+    if hasattr(sys.stderr, 'reconfigure'):
+        try:
+            sys.stderr.reconfigure(encoding='utf-8')
+        except:
+            pass
+    
+    # Set environment variable for UTF-8
+    os.environ['PYTHONIOENCODING'] = 'utf-8'
+
 # Add src to path
 current_dir = Path(__file__).parent
-project_root = current_dir.parent
+project_root = current_dir.parent.parent  # Go up two levels to get to project root
 src_path = project_root / "src"
 sys.path.insert(0, str(src_path))
 
@@ -28,13 +45,13 @@ def parse_arguments():
         epilog="""
 Examples:
   # Run on emotions dataset with default settings
-  python run_automl.py --dataset emotions
+  python -m src.automl.run_automl --dataset emotions
   
   # Run with custom time budget and specific architectures
-  python run_automl.py --dataset emotions --time_budget 12 --architectures resnet18 efficientnet_b0
+  python -m src.automl.run_automl --dataset emotions --time_budget 12 --architectures resnet18 efficientnet_b0
   
   # Run with debug logging
-  python run_automl.py --dataset emotions --log_level DEBUG
+  python -m src.automl.run_automl --dataset emotions --log_level DEBUG
         """
     )
     
@@ -131,21 +148,21 @@ def setup_dataset_config(dataset_name: str) -> dict:
             'num_classes': 7,
             'channels': 1,  # Grayscale
             'image_size': 48,
-            'csv_file': 'emotions_train.csv'
+            'csv_file': 'emotions/train.csv'
         },
         'fashion': {
             'dataset_name': 'fashion',
             'num_classes': 10,
             'channels': 1,  # Grayscale
             'image_size': 28,
-            'csv_file': 'fashion_train.csv'
+            'csv_file': 'fashion/train.csv'
         },
         'flowers': {
             'dataset_name': 'flowers',
             'num_classes': 5,
             'channels': 3,  # Color
             'image_size': 224,
-            'csv_file': 'flower_train.csv'
+            'csv_file': 'flowers/train.csv'
         }
     }
     
@@ -154,47 +171,52 @@ def setup_dataset_config(dataset_name: str) -> dict:
 def validate_environment(args):
     """Validate that the environment is properly set up"""
     
-    print("🔍 Validating environment...")
-    
+    print("Validating environment...")
+
     # Check data directory
-    data_path = Path(args.data_root)
+    data_path = Path(args.data_root).resolve()
+    print(f"[DEBUG] Checking data path: {data_path} (Exists? {data_path.exists()})")
+
     if not data_path.exists():
-        print(f"❌ Data directory not found: {data_path}")
+        print(f"ERROR: Data directory not found: {data_path}")
         print("Please ensure the data directory exists and contains your dataset.")
         return False
-    
+
     # Check dataset CSV file
     dataset_config = setup_dataset_config(args.dataset)
     csv_file = data_path / dataset_config['csv_file']
+    print(f"[DEBUG] Checking CSV file: {csv_file} (Exists? {csv_file.exists()})")
+
     if not csv_file.exists():
-        print(f"❌ Dataset CSV file not found: {csv_file}")
+        print(f"ERROR: Dataset CSV file not found: {csv_file}")
         print(f"Please ensure {dataset_config['csv_file']} exists in the data directory.")
         return False
-    
+
     # Check PyTorch installation
     try:
         import torch
-        print(f"✅ PyTorch {torch.__version__}")
+        print(f"PyTorch {torch.__version__}")
         if torch.cuda.is_available():
-            print(f"✅ CUDA available: {torch.cuda.get_device_name(0)}")
+            print(f"CUDA available: {torch.cuda.get_device_name(0)}")
         else:
-            print("ℹ️  CUDA not available, will use CPU")
+            print("CUDA not available, will use CPU")
     except ImportError:
-        print("❌ PyTorch not installed")
+        print("ERROR: PyTorch not installed")
         return False
-    
+
     # Check other dependencies
-    required_packages = ['timm', 'optuna', 'albumentations', 'pandas', 'scikit-learn']
+    required_packages = ['timm', 'optuna', 'albumentations', 'pandas', 'sklearn']
     for package in required_packages:
         try:
             __import__(package)
-            print(f"✅ {package}")
+            print(f"{package} - OK")
         except ImportError:
-            print(f"❌ {package} not installed")
+            print(f"ERROR: {package} not installed")
             return False
-    
-    print("✅ Environment validation complete")
+
+    print("Environment validation complete")
     return True
+
 
 def main():
     """Main execution function"""
@@ -202,9 +224,9 @@ def main():
     # Parse arguments
     args = parse_arguments()
     
-    # Print banner
+    # Print banner (removed emojis for Windows compatibility)
     print("="*80)
-    print("🚀 AutoML Pipeline for Image Classification")
+    print("AutoML Pipeline for Image Classification")
     print("   Intelligent Architecture Search with Adaptive HPO Selection")
     print("="*80)
     print(f"Dataset: {args.dataset}")
@@ -215,7 +237,7 @@ def main():
     
     # Validate environment
     if not validate_environment(args):
-        print("❌ Environment validation failed. Please fix the issues above.")
+        print("ERROR: Environment validation failed. Please fix the issues above.")
         sys.exit(1)
     
     # Setup logging
@@ -242,16 +264,16 @@ def main():
         
         # Quick test mode adjustments
         if args.quick_test:
-            logger.info("🚀 Running in quick test mode")
+            logger.info("Running in quick test mode")
             config.set('time_budget_hours', min(args.time_budget, 2.0))
             config.set('max_epochs_per_architecture', 10)
             config.set('final_training_epochs', 20)
         
         # Create and run pipeline
-        logger.info("🏗️ Initializing AutoML Pipeline...")
+        logger.info("Initializing AutoML Pipeline...")
         pipeline = AutoMLPipeline(config)
         
-        logger.info("🚀 Starting AutoML execution...")
+        logger.info("Starting AutoML execution...")
         results = pipeline.run(
             dataset_root=args.data_root,
             architectures=args.architectures,
@@ -260,27 +282,29 @@ def main():
         
         # Print success message
         print("\n" + "="*80)
-        print("🎉 AutoML Pipeline completed successfully!")
+        print("AUTOML PIPELINE COMPLETED SUCCESSFULLY!")
         print("="*80)
         
         if results['best_model']['architecture']:
-            print(f"🏆 Best Model: {results['best_model']['architecture']}")
-            print(f"🎯 Test Accuracy: {results['best_model']['test_accuracy']:.4f}")
-            print(f"⏱️  Total Time: {results['pipeline_config']['total_execution_time_hours']:.2f} hours")
+            print(f"Best Model: {results['best_model']['architecture']}")
+            print(f"Test Accuracy: {results['best_model']['test_accuracy']:.4f}")
+            print(f"Total Time: {results['pipeline_config']['total_execution_time_hours']:.2f} hours")
+        else:
+            print("No models completed training")
         
-        print(f"📁 Results saved to: {args.results_dir}")
-        print(f"📁 Models saved to: {args.checkpoint_dir}")
+        print(f"Results saved to: {args.results_dir}")
+        print(f"Models saved to: {args.checkpoint_dir}")
         
         return 0
         
     except KeyboardInterrupt:
-        logger.info("🛑 Execution interrupted by user")
-        print("\n🛑 Execution interrupted by user")
+        logger.info("Execution interrupted by user")
+        print("\nExecution interrupted by user")
         return 1
         
     except Exception as e:
-        logger.error(f"💥 Pipeline failed: {e}")
-        print(f"\n💥 Pipeline failed: {e}")
+        logger.error(f"Pipeline failed: {e}")
+        print(f"\nPipeline failed: {e}")
         import traceback
         traceback.print_exc()
         return 1
