@@ -295,7 +295,7 @@ class AutoMLPipeline:
         return architecture_results
     
     def _phase4_final_training(self) -> Dict[str, Any]:
-        """Phase 4: Final training of selected architectures"""
+        """Phase 4: Final training of selected architectures - FIXED VERSION"""
         
         with Timer("Final training") as timer:
             # Select candidates for final training
@@ -306,6 +306,10 @@ class AutoMLPipeline:
                 return {}
             
             self.logger.info(f"Final training candidates: {final_candidates}")
+            
+            # FIXED: Ensure checkpoint directory exists
+            checkpoint_dir = Path(self.config.get('checkpoint_dir', './checkpoints'))
+            ensure_dir(checkpoint_dir)
             
             final_results = {}
             best_overall_score = 0.0
@@ -325,6 +329,9 @@ class AutoMLPipeline:
                 # Extended training for final model
                 best_hyperparams['final_epochs'] = self.config.get('final_training_epochs', 100)
                 
+                # FIXED: Create checkpoint path with proper directory
+                checkpoint_path = checkpoint_dir / f"final_{arch_name}.pt"
+                
                 # Train final model
                 final_model, training_results = self.trainer.train_final_model(
                     arch_name,
@@ -333,7 +340,7 @@ class AutoMLPipeline:
                     self.val_loader,
                     self.test_loader,
                     self.model_factory,
-                    save_path=f"checkpoints/final_{arch_name}.pt"
+                    save_path=str(checkpoint_path)  # Convert Path to string
                 )
                 
                 final_results[arch_name] = training_results

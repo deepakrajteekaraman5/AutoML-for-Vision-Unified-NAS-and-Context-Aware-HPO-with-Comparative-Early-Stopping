@@ -2,6 +2,7 @@
 """
 Core utilities for AutoML Pipeline
 Provides logging, configuration, timing, and reproducibility utilities
+UPDATED: Added quick test configurations and reduced trial settings
 """
 
 import logging
@@ -18,7 +19,7 @@ import pickle
 from datetime import datetime
 
 class AutoMLConfig:
-    """Configuration management for AutoML pipeline"""
+    """Configuration management for AutoML pipeline - WITH QUICK TEST SUPPORT"""
     
     def __init__(self, config_path: Optional[str] = None):
         self.config = self._load_default_config()
@@ -26,7 +27,7 @@ class AutoMLConfig:
             self.load_config(config_path)
     
     def _load_default_config(self) -> Dict[str, Any]:
-        """Load default configuration for emotions dataset"""
+        """Load default configuration for emotions dataset - WITH REDUCED TRIALS"""
         return {
             # Basic settings
             'random_seed': 42,
@@ -62,6 +63,32 @@ class AutoMLConfig:
             'image_size': 48,
             'num_classes': 7,
             'channels': 1,
+            
+            # NEW: HPO Configuration (REDUCED TRIALS)
+            'hpo_base_trials': 8,              # Reduced from 50
+            'hpo_max_trials_bayesian': 12,     # Reduced from 100
+            'hpo_max_trials_random': 10,       # Reduced from 80
+            'hpo_max_trials_successive': 16,   # Reduced from 200
+            
+            # NEW: Quick test mode settings
+            'quick_test': False,
+            'quick_test_time_budget': 1.0,     # 1 hour for quick test
+            'quick_test_max_epochs': 10,       # 10 epochs per trial in quick mode
+            'quick_test_trials': 5,            # 5 trials per architecture in quick mode
+            'quick_test_max_architectures': 2, # Only 2 architectures in quick mode
+            
+            # NEW: Performance thresholds
+            'early_success_threshold': 0.95,   # Stop HPO if score > 95%
+            'min_trials_before_early_stop': 5, # Minimum trials before early stopping
+            
+            # NEW: Visualization settings
+            'enable_plotting': True,
+            'plot_training_curves': True,
+            'plot_hpo_progress': True,
+            'plot_architecture_comparison': True,
+            'save_plots': True,
+            'plot_format': 'png',              # png, pdf, svg
+            'plot_dpi': 150,
         }
     
     def load_config(self, config_path: str):
@@ -87,9 +114,51 @@ class AutoMLConfig:
     def update(self, **kwargs):
         """Update multiple config values"""
         self.config.update(kwargs)
+    
+    def enable_quick_test_mode(self):
+        """NEW: Enable quick test mode with reduced settings"""
+        self.config.update({
+            'quick_test': True,
+            'time_budget_hours': self.config['quick_test_time_budget'],
+            'hpo_base_trials': self.config['quick_test_trials'],
+            'max_epochs_per_architecture': self.config['quick_test_max_epochs'],
+            'min_epochs_per_architecture': 3,
+            'early_stopping_patience': 5,
+        })
+        logging.getLogger('AutoML').info("Quick test mode enabled - reduced time budget and trials")
+    
+    def get_quick_test_architectures(self) -> List[str]:
+        """NEW: Get reduced architecture list for quick testing"""
+        if self.config['quick_test']:
+            # Return only 2 fast architectures for quick testing
+            return ['resnet18', 'efficientnet_b0']
+        else:
+            # Return None to use full strategic selection
+            return None
+    
+    def print_configuration_summary(self):
+        """NEW: Print current configuration for verification"""
+        print("\n" + "="*60)
+        print("AUTOML CONFIGURATION SUMMARY")
+        print("="*60)
+        print(f"Mode: {'QUICK TEST' if self.config['quick_test'] else 'FULL PIPELINE'}")
+        print(f"Time Budget: {self.config['time_budget_hours']} hours")
+        print(f"Dataset: {self.config['dataset_name']} ({self.config['num_classes']} classes)")
+        print(f"HPO Base Trials: {self.config['hpo_base_trials']}")
+        print(f"Max Epochs per Architecture: {self.config['max_epochs_per_architecture']}")
+        print(f"Early Success Threshold: {self.config['early_success_threshold']}")
+        print(f"Plotting Enabled: {self.config['enable_plotting']}")
+        
+        if self.config['quick_test']:
+            print(f"\nQuick Test Settings:")
+            print(f"  Max Architectures: {self.config['quick_test_max_architectures']}")
+            print(f"  Trials per Arch: {self.config['quick_test_trials']}")
+            print(f"  Max Epochs: {self.config['quick_test_max_epochs']}")
+        
+        print("="*60)
 
 def setup_logging(level: str = 'INFO', log_file: Optional[str] = None) -> logging.Logger:
-    """Setup comprehensive logging for AutoML pipeline"""
+    """Setup comprehensive logging for AutoML pipeline - ENHANCED"""
     
     # Create main logger
     logger = logging.getLogger('AutoML')
@@ -98,13 +167,13 @@ def setup_logging(level: str = 'INFO', log_file: Optional[str] = None) -> loggin
     # Clear existing handlers to avoid duplicates
     logger.handlers.clear()
     
-    # Create formatter with timestamp
+    # Create formatter with timestamp and better formatting
     formatter = logging.Formatter(
         '%(asctime)s - %(name)s - %(levelname)s - %(message)s',
         datefmt='%Y-%m-%d %H:%M:%S'
     )
     
-    # Console handler with colors
+    # Console handler with colors (if available)
     console_handler = logging.StreamHandler()
     console_handler.setFormatter(formatter)
     console_handler.setLevel(logging.INFO)  # Always show INFO+ on console
@@ -120,13 +189,14 @@ def setup_logging(level: str = 'INFO', log_file: Optional[str] = None) -> loggin
     
     # Create child loggers for different components
     component_loggers = ['DataManager', 'ModelFactory', 'EarlyStopping', 
-                        'HPOSelector', 'BudgetManager', 'AutoMLPipeline']
+                        'HPOSelector', 'BudgetManager', 'AutoMLPipeline', 'Trainer']
     
     for component in component_loggers:
         child_logger = logging.getLogger(f'AutoML.{component}')
         child_logger.setLevel(getattr(logging, level.upper()))
     
     logger.info("=== AutoML Pipeline Logging Initialized ===")
+    logger.info(f"Log level: {level}, File: {log_file or 'Console only'}")
     return logger
 
 def set_seed(seed: int = 42):
@@ -144,10 +214,11 @@ def set_seed(seed: int = 42):
     # Set environment variable for additional reproducibility
     os.environ['PYTHONHASHSEED'] = str(seed)
     
+    # FIXED: Use ASCII-only logging to avoid Windows encoding issues
     logging.getLogger('AutoML').info(f"Random seed set to {seed} for reproducibility")
 
 class Timer:
-    """Context manager and standalone timer for operation timing"""
+    """Context manager and standalone timer for operation timing - ENHANCED"""
     
     def __init__(self, name: str = "Operation", logger: Optional[logging.Logger] = None):
         self.name = name
@@ -157,12 +228,13 @@ class Timer:
     
     def __enter__(self):
         self.start()
+        self.logger.info(f" Starting: {self.name}")
         return self
     
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.stop()
         duration = self.elapsed
-        self.logger.info(f"{self.name} completed in {self._format_duration(duration)}")
+        self.logger.info(f" {self.name} completed in {self._format_duration(duration)}")
     
     def start(self):
         """Start the timer"""
@@ -195,7 +267,7 @@ class Timer:
             return f"{hours:.2f} hours"
 
 class MetricTracker:
-    """Track performance metrics across training runs"""
+    """Track performance metrics across training runs - ENHANCED WITH PLOTTING SUPPORT"""
     
     def __init__(self):
         self.metrics = {}
@@ -263,6 +335,69 @@ class MetricTracker:
             return "improving" 
         else:
             return "declining"
+    
+    def export_for_plotting(self) -> Dict[str, Any]:
+        """NEW: Export data in format suitable for plotting"""
+        return {
+            'metrics': self.metrics.copy(),
+            'history': self.history.copy(),
+            'summary': {
+                'num_entries': len(self.history),
+                'metrics_tracked': list(self.metrics.keys()),
+                'duration': self.history[-1]['timestamp'] - self.history[0]['timestamp'] if self.history else 0
+            }
+        }
+
+class ProgressTracker:
+    """NEW: Track progress across the entire AutoML pipeline"""
+    
+    def __init__(self, total_architectures: int):
+        self.total_architectures = total_architectures
+        self.completed_architectures = 0
+        self.current_architecture = None
+        self.current_trial = 0
+        self.total_trials = 0
+        self.start_time = time.time()
+        self.logger = logging.getLogger('AutoML.ProgressTracker')
+    
+    def start_architecture(self, architecture_name: str, n_trials: int):
+        """Start processing a new architecture"""
+        self.current_architecture = architecture_name
+        self.current_trial = 0
+        self.total_trials = n_trials
+        
+        progress_pct = (self.completed_architectures / self.total_architectures) * 100
+        self.logger.info(f" Starting {architecture_name} ({self.completed_architectures + 1}/{self.total_architectures}) - {progress_pct:.1f}% complete")
+    
+    def update_trial(self, trial_idx: int, score: float):
+        """Update trial progress"""
+        self.current_trial = trial_idx
+        trial_progress = (trial_idx / self.total_trials) * 100
+        self.logger.info(f"  Trial {trial_idx}/{self.total_trials} ({trial_progress:.1f}%) - Score: {score:.4f}")
+    
+    def complete_architecture(self, best_score: float):
+        """Mark architecture as completed"""
+        self.completed_architectures += 1
+        elapsed = time.time() - self.start_time
+        
+        overall_progress = (self.completed_architectures / self.total_architectures) * 100
+        self.logger.info(f" {self.current_architecture} completed - Best: {best_score:.4f}")
+        self.logger.info(f" Overall progress: {self.completed_architectures}/{self.total_architectures} ({overall_progress:.1f}%) - Elapsed: {elapsed/3600:.1f}h")
+    
+    def get_eta(self) -> str:
+        """Get estimated time to completion"""
+        if self.completed_architectures == 0:
+            return "Calculating..."
+        
+        elapsed = time.time() - self.start_time
+        time_per_arch = elapsed / self.completed_architectures
+        remaining_archs = self.total_architectures - self.completed_architectures
+        eta_seconds = remaining_archs * time_per_arch
+        
+        if eta_seconds < 3600:
+            return f"{eta_seconds/60:.0f} minutes"
+        else:
+            return f"{eta_seconds/3600:.1f} hours"
 
 def save_checkpoint(obj: Any, filepath: str, metadata: Optional[Dict] = None):
     """Save object to checkpoint with metadata"""
@@ -280,7 +415,7 @@ def save_checkpoint(obj: Any, filepath: str, metadata: Optional[Dict] = None):
         with open(filepath, 'wb') as f:
             pickle.dump(checkpoint_data, f)
     
-    logging.getLogger('AutoML').info(f"Checkpoint saved to {filepath}")
+    logging.getLogger('AutoML').info(f" Checkpoint saved to {filepath}")
 
 def load_checkpoint(filepath: str) -> Any:
     """Load object from checkpoint"""
@@ -295,27 +430,27 @@ def load_checkpoint(filepath: str) -> Any:
     
     # Handle both new format (with metadata) and old format (raw object)
     if isinstance(checkpoint_data, dict) and 'object' in checkpoint_data:
-        logging.getLogger('AutoML').info(f"Loaded checkpoint from {filepath} "
+        logging.getLogger('AutoML').info(f" Loaded checkpoint from {filepath} "
                                         f"(saved: {checkpoint_data.get('timestamp', 'unknown')})")
         return checkpoint_data['object']
     else:
         # Old format - just return the object
-        logging.getLogger('AutoML').info(f"Loaded checkpoint from {filepath}")
+        logging.getLogger('AutoML').info(f" Loaded checkpoint from {filepath}")
         return checkpoint_data
 
 def get_device(prefer_gpu: bool = True) -> torch.device:
-    """Get the best available device"""
+    """Get the best available device - ENHANCED REPORTING"""
     if prefer_gpu and torch.cuda.is_available():
         device = torch.device('cuda')
         gpu_name = torch.cuda.get_device_name(0)
         memory_gb = torch.cuda.get_device_properties(0).total_memory / 1e9
-        logging.getLogger('AutoML').info(f"Using GPU: {gpu_name} ({memory_gb:.1f}GB)")
+        logging.getLogger('AutoML').info(f" Using GPU: {gpu_name} ({memory_gb:.1f}GB)")
     elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
         device = torch.device('mps')
-        logging.getLogger('AutoML').info("Using Apple Metal Performance Shaders (MPS)")
+        logging.getLogger('AutoML').info(" Using Apple Metal Performance Shaders (MPS)")
     else:
         device = torch.device('cpu')
-        logging.getLogger('AutoML').info("Using CPU")
+        logging.getLogger('AutoML').info(" Using CPU")
     
     return device
 
@@ -335,6 +470,31 @@ def calculate_model_size(model: torch.nn.Module) -> Dict[str, int]:
         'size_mb': (total_params * 4) / (1024 * 1024)  # Assuming float32
     }
 
+def format_time_remaining(seconds: float) -> str:
+    """NEW: Format remaining time in human-readable format"""
+    if seconds < 60:
+        return f"{seconds:.0f}s"
+    elif seconds < 3600:
+        return f"{seconds/60:.0f}m"
+    else:
+        return f"{seconds/3600:.1f}h"
+
+def print_performance_summary(results: Dict[str, Any]):
+    """NEW: Print a quick performance summary"""
+    print("\n" + "="*50)
+    print("PERFORMANCE SUMMARY")
+    print("="*52)
+    
+    if results.get('best_model') and results['best_model'].get('architecture'):
+        best = results['best_model']
+        print(f" Best Architecture: {best['architecture']}")
+        print(f" Test Accuracy: {best['test_accuracy']:.4f}")
+        print(f" Total Time: {results['pipeline_config']['total_execution_time_hours']:.2f}h")
+    else:
+        print(" No models completed training")
+    
+    print("="*52)
+
 # Test the utilities if run directly
 if __name__ == "__main__":
     print("Testing AutoML utilities...")
@@ -342,6 +502,12 @@ if __name__ == "__main__":
     # Test configuration
     config = AutoMLConfig()
     print(f"✓ Config loaded - Time budget: {config.get('time_budget_hours')} hours")
+    print(f"✓ HPO base trials: {config.get('hpo_base_trials')}")
+    
+    # Test quick mode
+    config.enable_quick_test_mode()
+    print(f"✓ Quick test enabled - Time budget: {config.get('time_budget_hours')} hours")
+    config.print_configuration_summary()
     
     # Test logging
     logger = setup_logging(level='INFO')
@@ -360,5 +526,12 @@ if __name__ == "__main__":
     # Test device detection
     device = get_device()
     print(f"✓ Device detection - Using: {device}")
+    
+    # Test progress tracker
+    progress = ProgressTracker(total_architectures=4)
+    progress.start_architecture('resnet18', 10)
+    progress.update_trial(1, 0.85)
+    progress.complete_architecture(0.87)
+    print(f"✓ Progress tracker - ETA: {progress.get_eta()}")
     
     print("All utilities working correctly!")
