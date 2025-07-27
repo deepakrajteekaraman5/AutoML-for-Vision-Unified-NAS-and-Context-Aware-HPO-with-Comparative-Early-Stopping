@@ -650,7 +650,7 @@ if __name__ == "__main__":
     budget_manager = BudgetManager(config)
     
     # Test with sample architectures
-    architectures = ['resnet18', 'efficientnet_b0', 'densenet121', 'mobilenetv3_small_100']
+    architectures = ['resnet18', 'efficientnet_b0', 'densenet121', 'mobilenetv3_large_100']
     
     print("Testing Budget Manager...")
     budget_manager.start_execution(architectures)

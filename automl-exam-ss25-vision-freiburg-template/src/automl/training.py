@@ -14,6 +14,8 @@ import logging
 import time
 from typing import Dict, List, Optional, Tuple, Any, Callable
 from pathlib import Path
+from sklearn.utils.class_weight import compute_class_weight
+from tqdm import tqdm
 
 from .utils import AutoMLConfig, Timer, MetricTracker, get_device, calculate_model_size
 
@@ -369,43 +371,72 @@ class Trainer:
         return scheduler
     
     def _create_loss_function(self, train_loader: DataLoader) -> nn.Module:
-        """Create loss function with class weighting for imbalanced datasets"""
+        """Create loss function with class weighting for imbalanced datasets using sklearn's robust method"""
         try:
-            # Calculate class weights from training data
-            class_counts = {}
-            total_samples = 0
+            # Get the total number of classes from the dataset
+            dataset = train_loader.dataset
             
-            # Sample a subset of data to calculate class distribution efficiently
-            sample_batches = min(10, len(train_loader))  # Sample first 10 batches
+            # Handle different dataset types (Subset, etc.)
+            if hasattr(dataset, 'dataset'):
+                # This is a Subset, get the underlying dataset
+                underlying_dataset = dataset.dataset
+            else:
+                underlying_dataset = dataset
+            
+            # Get total number of classes from the dataset
+            if hasattr(underlying_dataset, 'num_classes'):
+                total_num_classes = underlying_dataset.num_classes
+            else:
+                self.logger.warning("Could not determine total number of classes, using standard loss")
+                return nn.CrossEntropyLoss()
+            
+            # Collect labels from training data for class weight calculation
+            all_labels = []
+            
+            # Sample a larger subset for more robust class weight calculation
+            sample_batches = min(20, len(train_loader))  # Increased sample size for better estimation
             for batch_idx, (_, labels) in enumerate(train_loader):
                 if batch_idx >= sample_batches:
                     break
-                    
-                for label in labels:
-                    label_item = label.item()
-                    class_counts[label_item] = class_counts.get(label_item, 0) + 1
-                    total_samples += 1
+                all_labels.extend(labels.cpu().numpy().tolist())
             
-            if len(class_counts) > 1:
-                # Calculate inverse frequency weights
-                num_classes = len(class_counts)
-                class_weights = []
+            if len(set(all_labels)) > 1:
+                # Get unique classes present in the sample
+                unique_classes_in_sample = np.unique(all_labels)
                 
-                for class_idx in range(num_classes):
-                    if class_idx in class_counts:
-                        # Inverse frequency weighting
-                        weight = total_samples / (num_classes * class_counts[class_idx])
-                        class_weights.append(weight)
-                    else:
-                        # Handle missing classes
-                        class_weights.append(1.0)
+                # Compute class weights using sklearn's robust 'balanced' method
+                # Only for classes actually present in the sample
+                sample_class_weights = compute_class_weight(
+                    class_weight='balanced',
+                    classes=unique_classes_in_sample,
+                    y=all_labels
+                )
+                
+                # Create weight array for ALL classes (0 to total_num_classes-1)
+                class_weights_array = np.ones(total_num_classes, dtype=np.float32)
+                
+                # Assign computed weights to classes present in sample
+                for i, class_idx in enumerate(unique_classes_in_sample):
+                    class_weights_array[class_idx] = sample_class_weights[i]
+                
+                # For missing classes, use the mean weight of present classes
+                mean_weight = np.mean(sample_class_weights)
+                for class_idx in range(total_num_classes):
+                    if class_idx not in unique_classes_in_sample:
+                        class_weights_array[class_idx] = mean_weight
                 
                 # Convert to tensor
-                class_weights_tensor = torch.FloatTensor(class_weights).to(self.device)
+                class_weights_tensor = torch.FloatTensor(class_weights_array).to(self.device)
                 
                 # Log class weights for debugging
-                self.logger.info(f"Class distribution: {class_counts}")
-                self.logger.info(f"Class weights: {class_weights}")
+                class_counts = {cls: all_labels.count(cls) for cls in set(all_labels)}
+                self.logger.info(f"Total classes in dataset: {total_num_classes}")
+                self.logger.info(f"Classes found in sample: {len(set(all_labels))}")
+                self.logger.info(f"Sample size: {len(all_labels)} labels")
+                self.logger.info(f"Class distribution (sample): {dict(sorted(class_counts.items()))}")
+                self.logger.info(f"Class weights tensor shape: {class_weights_tensor.shape}")
+                self.logger.info(f"Sample class weights range: [{class_weights_tensor.min():.4f}, {class_weights_tensor.max():.4f}]")
+                self.logger.info(f"Mean weight for missing classes: {mean_weight:.4f}")
                 
                 return nn.CrossEntropyLoss(weight=class_weights_tensor)
             else:
@@ -414,6 +445,7 @@ class Trainer:
                 
         except Exception as e:
             self.logger.warning(f"Failed to calculate class weights: {e}, using standard loss")
+            self.logger.warning(f"Error details: {str(e)}")
             return nn.CrossEntropyLoss()
     
     def _estimate_memory_usage(self, model: nn.Module) -> float:

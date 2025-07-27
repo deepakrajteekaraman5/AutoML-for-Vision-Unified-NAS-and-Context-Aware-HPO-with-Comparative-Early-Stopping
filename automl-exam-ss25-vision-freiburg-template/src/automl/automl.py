@@ -155,11 +155,13 @@ class AutoMLPipeline:
                 complexity = self.dataset_info['characteristics']['complexity_score']
                 num_samples = self.dataset_info['characteristics']['num_samples']
                 
-                if num_samples < 10000:  # Small dataset - use fewer, faster models
-                    selected_architectures = ['resnet18', 'efficientnet_b0', 'mobilenetv3_small_100']
-                elif complexity > 6.0:  # Complex dataset - use more sophisticated models
+                if num_samples < 10000:  # Skin cancer (7k), Flowers (5k)
+                    selected_architectures = ['resnet18', 'efficientnet_b0', 'mobilenetv3_large_100']  # Use large, not small
+                elif num_samples > 50000:  # Fashion (60k) - add ViT for large datasets
+                    selected_architectures = ['resnet18', 'efficientnet_b1', 'convnext_tiny', 'vit_small']
+                elif complexity > 6.0:  # Complex datasets like emotions (28k)
                     selected_architectures = ['resnet34', 'efficientnet_b1', 'convnext_tiny', 'densenet121']
-                else:  # Medium complexity - balanced selection
+                else:  # Medium complexity - emotions (28k) likely falls here
                     selected_architectures = ['resnet18', 'efficientnet_b0', 'convnext_tiny', 'densenet121']
             else:
                 selected_architectures = architectures
@@ -537,10 +539,11 @@ class AutoMLPipeline:
             base_space['learning_rate'] = {'type': 'float', 'range': (1e-4, 1e-2), 'log_scale': True}
             base_space['batch_size'] = {'type': 'categorical', 'choices': [32, 64, 128, 256]}
         elif dataset_name == 'flowers':
-            # Large color images, need smaller learning rates and batches
+            # Large color images (512x512), need smaller learning rates and batches
             base_space['learning_rate'] = {'type': 'float', 'range': (1e-5, 1e-3), 'log_scale': True}
-            base_space['batch_size'] = {'type': 'categorical', 'choices': [8, 16, 32]}
+            base_space['batch_size'] = {'type': 'categorical', 'choices': [4, 8, 16]}  # Even smaller batches for 512x512
             base_space['weight_decay'] = {'type': 'float', 'range': (1e-5, 1e-2), 'log_scale': True}
+            base_space['max_epochs'] = {'type': 'int', 'range': (10, 25)}  # Fewer epochs for large dataset
         elif dataset_name == 'fashion':
             # Small grayscale images, similar to emotions but different complexity
             base_space['learning_rate'] = {'type': 'float', 'range': (1e-4, 1e-2), 'log_scale': True}

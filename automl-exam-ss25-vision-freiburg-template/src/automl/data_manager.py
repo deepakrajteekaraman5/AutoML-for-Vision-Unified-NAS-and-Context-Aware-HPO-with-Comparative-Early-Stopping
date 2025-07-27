@@ -271,15 +271,16 @@ class AugmentationFactory:
                 ])
                 
         elif strategy == 'heavy':
+            image_height = self.characteristics.get_characteristic('image_height')
+            image_width = self.characteristics.get_characteristic('image_width')
+            
             augs = [
                 A.HorizontalFlip(p=0.5),
                 A.VerticalFlip(p=0.2),
                 A.Rotate(limit=25, p=0.7),
                 A.RandomBrightnessContrast(brightness_limit=0.3, contrast_limit=0.3, p=0.5),
-                A.GaussNoise(var_limit=(10.0, 50.0), p=0.2),
-                A.RandomResizedCrop(height=self.characteristics.get_characteristic('image_height'),
-                                  width=self.characteristics.get_characteristic('image_width'), 
-                                  scale=(0.8, 1.0), p=0.3),
+                A.GaussNoise(noise_scale_factor=0.15, p=0.2),
+                A.RandomResizedCrop(size=(image_height, image_width), scale=(0.8, 1.0), p=0.3),
             ]
             
             # Add color augmentations for color images  

@@ -67,7 +67,7 @@ def test_model_factory():
         
         # Test 4: Hyperparameter recommendations
         print("\n4. Testing hyperparameter recommendations...")
-        for model_name in ['resnet18', 'efficientnet_b0', 'mobilenetv3_small_100']:
+        for model_name in ['resnet18', 'efficientnet_b0', 'mobilenetv3_large_100']:
             recommendations = factory.get_recommended_hyperparameters(model_name)
             print(f"   {model_name}:")
             print(f"     LR: {recommendations['learning_rate']}")
@@ -81,7 +81,7 @@ def test_model_factory():
         print("\n5. Testing model creation...")
         
         # Test a few key models
-        models_to_test = ['resnet18', 'efficientnet_b0', 'mobilenetv3_small_100']
+        models_to_test = ['resnet18', 'efficientnet_b0', 'mobilenetv3_large_100']
         
         for model_name in models_to_test:
             print(f"   Creating {model_name}...")

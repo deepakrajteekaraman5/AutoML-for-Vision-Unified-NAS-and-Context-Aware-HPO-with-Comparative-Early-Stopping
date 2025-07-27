@@ -3,7 +3,7 @@
 2025-07-23 23:45:06 - AutoML - INFO - Initializing AutoML Pipeline...
 2025-07-23 23:45:06 - AutoML.DataManager - INFO - Initialized DataManager for emotions dataset
 2025-07-23 23:45:06 - AutoML.ModelFactory - INFO - ModelFactory initialized for emotions: 7 classes, 1 channels, 48x48 images
-2025-07-23 23:45:06 - AutoML.ModelFactory - INFO - Strategic models available: ['resnet18', 'resnet34', 'efficientnet_b0', 'efficientnet_b1', 'convnext_tiny', 'mobilenetv3_small_100', 'densenet121']
+2025-07-23 23:45:06 - AutoML.ModelFactory - INFO - Strategic models available: ['resnet18', 'resnet34', 'efficientnet_b0', 'efficientnet_b1', 'convnext_tiny', 'mobilenetv3_large_100', 'densenet121']
 2025-07-23 23:45:06 - AutoML - INFO - Using GPU: NVIDIA GeForce RTX 3060 Laptop GPU (6.4GB)
 2025-07-23 23:45:06 - AutoML.Trainer - INFO - Trainer initialized - Device: cuda
 2025-07-23 23:45:06 - AutoML.Trainer - INFO - Max epochs: 50, Min epochs: 5
@@ -1585,7 +1585,7 @@
 2025-07-25 18:55:38 - AutoML - INFO -  Initializing AutoML Pipeline...
 2025-07-25 18:55:38 - AutoML.DataManager - INFO - Initialized DataManager for emotions dataset
 2025-07-25 18:55:38 - AutoML.ModelFactory - INFO - ModelFactory initialized for emotions: 7 classes, 1 channels, 48x48 images
-2025-07-25 18:55:38 - AutoML.ModelFactory - INFO - Strategic models available: ['resnet18', 'resnet34', 'efficientnet_b0', 'efficientnet_b1', 'convnext_tiny', 'mobilenetv3_small_100', 'densenet121']
+2025-07-25 18:55:38 - AutoML.ModelFactory - INFO - Strategic models available: ['resnet18', 'resnet34', 'efficientnet_b0', 'efficientnet_b1', 'convnext_tiny', 'mobilenetv3_large_100', 'densenet121']
 2025-07-25 18:55:38 - AutoML - INFO -  Using GPU: NVIDIA GeForce RTX 3060 Laptop GPU (6.4GB)
 2025-07-25 18:55:38 - AutoML.Trainer - INFO - Trainer initialized - Device: cuda
 2025-07-25 18:55:38 - AutoML.Trainer - INFO - Max epochs: 50, Min epochs: 5

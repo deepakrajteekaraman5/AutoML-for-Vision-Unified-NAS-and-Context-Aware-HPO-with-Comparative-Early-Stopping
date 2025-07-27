@@ -93,7 +93,7 @@ Examples:
         '--architectures',
         nargs='+',
         choices=['resnet18', 'resnet34', 'efficientnet_b0', 'efficientnet_b1', 
-                'convnext_tiny', 'mobilenetv3_small_100', 'densenet121'],
+                'convnext_tiny', 'mobilenetv3_large_100', 'densenet121'],
         help='Specific architectures to evaluate (default: auto-select based on dataset)'
     )
     
@@ -201,9 +201,9 @@ def setup_dataset_config(dataset_name: str) -> dict:
         },
         'flowers': {
             'dataset_name': 'flowers',
-            'num_classes': 5,
+            'num_classes': 102,  # FIXED: Was 5, now 102
             'channels': 3,  # Color
-            'image_size': 224,
+            'image_size': 512,  # FIXED: Was 224, now 512
             'csv_file': 'flowers/train.csv'
         }
     }
