@@ -100,18 +100,19 @@ class DatasetCharacteristics:
         return characteristics
     
     def _calculate_complexity_score(self, info: Dict) -> float:
-        """Calculate complexity score (0-10) based on dataset characteristics"""
+        """Calculate complexity score (0-10) based on dataset characteristics - IMPROVED"""
         score = 0.0
         
-        # Image size complexity (0-3 points)
+        # Image size complexity (0-2 points) - reduced weight
         pixels = info['image_size_pixels']
         if pixels > 200000:  # 512x512 and above
-            score += 3.0
-        elif pixels > 50000:  # ~224x224
             score += 2.0
+        elif pixels > 50000:  # ~224x224
+            score += 1.5
         elif pixels > 10000:  # ~100x100
             score += 1.0
-        # else: 0 points for small images
+        else:
+            score += 0.5  # Small images still have some complexity
         
         # Number of classes complexity (0-3 points)
         classes = info['num_classes']
@@ -122,22 +123,35 @@ class DatasetCharacteristics:
         elif classes > 20:
             score += 2.0
         elif classes > 10:
-            score += 1.0
-        # else: 0 points for few classes
+            score += 1.5
+        else:
+            score += 1.0  # Even few classes have base complexity
         
-        # Color vs grayscale (0-2 points)
+        # Color vs grayscale (0-1 points) - reduced weight
         if info['channels'] == 3:
-            score += 2.0  # Color is more complex
+            score += 1.0  # Color is more complex
         elif info['channels'] == 1:
-            score += 1.0  # Grayscale is simpler
+            score += 0.5  # Grayscale is simpler
         
         # Dataset size complexity (0-2 points)
         samples = info['num_samples']
         if samples < 5000:
             score += 2.0  # Small datasets are harder (overfitting risk)
         elif samples < 20000:
+            score += 1.5
+        elif samples < 50000:
             score += 1.0
-        # Large datasets are actually easier to train on
+        else:
+            score += 0.5  # Large datasets are easier
+        
+        # ADDED: Task-specific complexity factors (0-2 points)
+        dataset_name = info.get('name', '').lower()
+        if 'emotion' in dataset_name:
+            score += 2.0  # Emotion recognition is inherently difficult
+        elif 'flower' in dataset_name:
+            score += 1.5  # Fine-grained classification is challenging
+        elif 'fashion' in dataset_name:
+            score += 1.0  # Fashion items have moderate complexity
         
         return min(score, 10.0)  # Cap at 10
     
@@ -418,31 +432,68 @@ class AutoMLDataManager:
             val_indices
         )
         
-        # Create DataLoaders
-        train_loader = DataLoader(
-            train_dataset,
-            batch_size=batch_size,
-            shuffle=True,
-            num_workers=num_workers,
-            pin_memory=torch.cuda.is_available(),
-            drop_last=True
-        )
-        
-        val_loader = DataLoader(
-            val_dataset,
-            batch_size=batch_size,
-            shuffle=False,
-            num_workers=num_workers,
-            pin_memory=torch.cuda.is_available()
-        )
-        
-        test_loader = DataLoader(
-            test_full,
-            batch_size=batch_size,
-            shuffle=False,
-            num_workers=num_workers,
-            pin_memory=torch.cuda.is_available()
-        )
+        # Create DataLoaders with robustness fixes
+        try:
+            train_loader = DataLoader(
+                train_dataset,
+                batch_size=batch_size,
+                shuffle=True,
+                num_workers=num_workers,
+                pin_memory=torch.cuda.is_available(),
+                drop_last=True,
+                persistent_workers=False if num_workers > 0 else None  # Only set if using workers
+            )
+            
+            val_loader = DataLoader(
+                val_dataset,
+                batch_size=batch_size,
+                shuffle=False,
+                num_workers=num_workers,
+                pin_memory=torch.cuda.is_available(),
+                persistent_workers=False if num_workers > 0 else None
+            )
+            
+            test_loader = DataLoader(
+                test_full,
+                batch_size=batch_size,
+                shuffle=False,
+                num_workers=num_workers,
+                pin_memory=torch.cuda.is_available(),
+                persistent_workers=False if num_workers > 0 else None
+            )
+            
+        except RuntimeError as e:
+            if "shared file mapping" in str(e) or "error code: <1455>" in str(e):
+                self.logger.warning(f"DataLoader creation failed with shared memory error: {e}")
+                self.logger.info("Falling back to single-threaded DataLoaders...")
+                
+                # Fallback to single-threaded DataLoaders only if the error occurs
+                train_loader = DataLoader(
+                    train_dataset,
+                    batch_size=batch_size,
+                    shuffle=True,
+                    num_workers=0,
+                    pin_memory=False,
+                    drop_last=True
+                )
+                
+                val_loader = DataLoader(
+                    val_dataset,
+                    batch_size=batch_size,
+                    shuffle=False,
+                    num_workers=0,
+                    pin_memory=False
+                )
+                
+                test_loader = DataLoader(
+                    test_full,
+                    batch_size=batch_size,
+                    shuffle=False,
+                    num_workers=0,
+                    pin_memory=False
+                )
+            else:
+                raise  # Re-raise if it's a different error
         
         self.logger.info(f"DataLoaders created successfully")
         return train_loader, val_loader, test_loader

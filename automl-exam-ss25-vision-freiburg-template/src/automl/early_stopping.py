@@ -272,12 +272,12 @@ class ComparativeEarlyStopping:
         self.config = config
         self.logger = logging.getLogger('AutoML.ComparativeEarlyStopping')
         
-        # Configuration parameters
-        self.confidence_threshold = config.get('early_stopping_confidence', 0.8)
-        self.min_epochs_before_stopping = config.get('min_epochs_before_stopping', 10)
+        # Configuration parameters - UPDATED: Less aggressive early stopping
+        self.confidence_threshold = config.get('early_stopping_confidence', 0.65)  # Reduced from 0.8
+        self.min_epochs_before_stopping = config.get('min_epochs_before_stopping', 15)  # Increased from 10
         self.max_epochs_per_architecture = config.get('max_epochs_per_architecture', 50)
-        self.performance_gap_threshold = config.get('performance_gap_threshold', 0.05)
-        self.patience = config.get('early_stopping_patience', 10)
+        self.performance_gap_threshold = config.get('performance_gap_threshold', 0.08)  # Increased from 0.05
+        self.patience = config.get('early_stopping_patience', 15)  # Increased from 10
         
         # Decision weights for multi-criteria stopping
         self.decision_weights = {

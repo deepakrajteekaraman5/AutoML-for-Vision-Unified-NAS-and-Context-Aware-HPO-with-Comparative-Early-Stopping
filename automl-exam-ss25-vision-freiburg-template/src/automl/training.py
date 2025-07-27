@@ -73,6 +73,10 @@ class Trainer:
             try:
                 self.logger.info(f"Evaluating hyperparameters for {architecture_name}: {hyperparams}")
                 
+                # Clear GPU memory before creating new model
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+                
                 # Create model with hyperparameters
                 model = model_factory.create_model(
                     architecture_name,
@@ -87,8 +91,8 @@ class Trainer:
                 # Create scheduler
                 scheduler = self._create_scheduler(optimizer, hyperparams)
                 
-                # Create loss function
-                criterion = nn.CrossEntropyLoss()
+                # Create loss function with class weighting for imbalanced datasets
+                criterion = self._create_loss_function(train_loader)
                 
                 # Training configuration
                 epochs_to_run = min(
@@ -195,7 +199,18 @@ class Trainer:
                 
             except Exception as e:
                 self.logger.error(f"Training failed for {architecture_name}: {e}")
+                # Clean up GPU memory on failure
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
                 return 0.0  # Return poor score for failed training
+            
+            finally:
+                # Always clean up memory after training
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+                # Clean up model reference
+                if 'model' in locals():
+                    del model
         
         return objective_function
     
@@ -352,6 +367,54 @@ class Trainer:
             scheduler = CosineAnnealingLR(optimizer, T_max=T_max)
         
         return scheduler
+    
+    def _create_loss_function(self, train_loader: DataLoader) -> nn.Module:
+        """Create loss function with class weighting for imbalanced datasets"""
+        try:
+            # Calculate class weights from training data
+            class_counts = {}
+            total_samples = 0
+            
+            # Sample a subset of data to calculate class distribution efficiently
+            sample_batches = min(10, len(train_loader))  # Sample first 10 batches
+            for batch_idx, (_, labels) in enumerate(train_loader):
+                if batch_idx >= sample_batches:
+                    break
+                    
+                for label in labels:
+                    label_item = label.item()
+                    class_counts[label_item] = class_counts.get(label_item, 0) + 1
+                    total_samples += 1
+            
+            if len(class_counts) > 1:
+                # Calculate inverse frequency weights
+                num_classes = len(class_counts)
+                class_weights = []
+                
+                for class_idx in range(num_classes):
+                    if class_idx in class_counts:
+                        # Inverse frequency weighting
+                        weight = total_samples / (num_classes * class_counts[class_idx])
+                        class_weights.append(weight)
+                    else:
+                        # Handle missing classes
+                        class_weights.append(1.0)
+                
+                # Convert to tensor
+                class_weights_tensor = torch.FloatTensor(class_weights).to(self.device)
+                
+                # Log class weights for debugging
+                self.logger.info(f"Class distribution: {class_counts}")
+                self.logger.info(f"Class weights: {class_weights}")
+                
+                return nn.CrossEntropyLoss(weight=class_weights_tensor)
+            else:
+                self.logger.info("Single class detected or no class distribution found, using standard loss")
+                return nn.CrossEntropyLoss()
+                
+        except Exception as e:
+            self.logger.warning(f"Failed to calculate class weights: {e}, using standard loss")
+            return nn.CrossEntropyLoss()
     
     def _estimate_memory_usage(self, model: nn.Module) -> float:
         """Estimate GPU memory usage in GB"""

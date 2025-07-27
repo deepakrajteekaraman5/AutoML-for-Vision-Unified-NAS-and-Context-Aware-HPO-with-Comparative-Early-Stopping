@@ -88,11 +88,11 @@ class BudgetManager:
         self.config = config
         self.logger = logging.getLogger('AutoML.BudgetManager')
         
-        # Time budget configuration
+        # Time budget configuration - UPDATED: Better resource allocation
         self.total_time_hours = config.get('time_budget_hours', 24)
-        self.architecture_search_ratio = config.get('architecture_search_ratio', 0.70)  # 70%
-        self.final_training_ratio = config.get('final_training_ratio', 0.20)           # 20%
-        self.buffer_ratio = config.get('buffer_ratio', 0.10)                           # 10%
+        self.architecture_search_ratio = config.get('architecture_search_ratio', 0.60)  # Reduced from 70%
+        self.final_training_ratio = config.get('final_training_ratio', 0.30)           # Increased from 20%
+        self.buffer_ratio = config.get('buffer_ratio', 0.10)                           # Keep 10%
         
         # Calculate phase budgets
         self.architecture_search_hours = self.total_time_hours * self.architecture_search_ratio

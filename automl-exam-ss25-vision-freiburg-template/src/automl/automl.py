@@ -190,12 +190,22 @@ class AutoMLPipeline:
         with Timer("Architecture search") as timer:
             # Create data loaders (will be reused for all architectures)
             self.logger.info("Creating data loaders...")
-            train_loader, val_loader, test_loader = self.data_manager.get_dataloaders(
-                batch_size=None,  # Will use recommended batch size
-                image_size=None,  # Will use dataset's native size
-                augmentation_strategy='auto',
-                num_workers=2
-            )
+            try:
+                train_loader, val_loader, test_loader = self.data_manager.get_dataloaders(
+                    batch_size=None,  # Will use recommended batch size
+                    image_size=None,  # Will use dataset's native size
+                    augmentation_strategy='auto',
+                    num_workers=2  # Use multi-threading for better performance
+                )
+            except Exception as e:
+                self.logger.error(f"Failed to create data loaders: {e}")
+                self.logger.info("Attempting fallback with minimal configuration...")
+                train_loader, val_loader, test_loader = self.data_manager.get_dataloaders(
+                    batch_size=16,  # Smaller batch size
+                    image_size=None,
+                    augmentation_strategy='light',
+                    num_workers=0  # Fallback to single-threaded
+                )
             
             # Store for later use
             self.train_loader = train_loader
@@ -205,9 +215,6 @@ class AutoMLPipeline:
             self.logger.info(f"  Train batches: {len(train_loader)}")
             self.logger.info(f"  Validation batches: {len(val_loader)}")
             self.logger.info(f"  Test batches: {len(test_loader)}")
-            
-            # Define hyperparameter search space
-            search_space = self._get_hyperparameter_search_space()
             
             # Architecture search results
             architecture_results = {}
@@ -227,6 +234,9 @@ class AutoMLPipeline:
                     continue
                 
                 self.logger.info(f"Starting HPO for {arch_name}")
+                
+                # Get architecture-specific hyperparameter search space
+                search_space = self._get_hyperparameter_search_space(arch_name)
                 
                 # Get architecture characteristics for HPO selection
                 arch_characteristics = self.model_factory.get_model_characteristics(arch_name)
@@ -451,24 +461,92 @@ class AutoMLPipeline:
         
         return comprehensive_results
     
-    def _get_hyperparameter_search_space(self) -> Dict[str, Any]:
-        """Define hyperparameter search space for HPO"""
+    def _get_hyperparameter_search_space(self, architecture_name: str = None) -> Dict[str, Any]:
+        """Define architecture-specific hyperparameter search space for HPO"""
         
-        return {
-            # Core training parameters
-            'learning_rate': {'type': 'float', 'range': (1e-5, 1e-1), 'log_scale': True},
-            'optimizer': {'type': 'categorical', 'choices': ['adam', 'sgd', 'adamw']},
-            'weight_decay': {'type': 'float', 'range': (1e-6, 1e-2), 'log_scale': True},
+        # Base search space - improved ranges based on analysis
+        base_space = {
+            # Core training parameters - expanded ranges
+            'learning_rate': {'type': 'float', 'range': (1e-6, 1e-1), 'log_scale': True},
+            'optimizer': {'type': 'categorical', 'choices': ['adam', 'sgd', 'adamw', 'rmsprop']},
+            'weight_decay': {'type': 'float', 'range': (1e-6, 1e-1), 'log_scale': True},  # Increased upper bound
             'batch_size': {'type': 'categorical', 'choices': [16, 32, 64, 128]},
             
             # Architecture-specific parameters
-            'dropout_rate': {'type': 'float', 'range': (0.0, 0.7)},
-            'pretrained': {'type': 'categorical', 'choices': [True, False]},
+            'dropout_rate': {'type': 'float', 'range': (0.0, 0.5)},  # Reduced max dropout
+            'pretrained': {'type': 'categorical', 'choices': [True]},  # Default to pretrained
             
             # Training schedule parameters
             'lr_scheduler': {'type': 'categorical', 'choices': ['cosine', 'step', 'plateau']},
-            'max_epochs': {'type': 'int', 'range': (20, 50)},
+            'max_epochs': {'type': 'int', 'range': (15, 40)},  # Reduced to prevent overfitting
         }
+        
+        # Architecture-specific modifications
+        if architecture_name:
+            if 'resnet' in architecture_name.lower():
+                # ResNet works well with SGD and higher learning rates
+                base_space.update({
+                    'learning_rate': {'type': 'float', 'range': (1e-4, 1e-1), 'log_scale': True},
+                    'optimizer': {'type': 'categorical', 'choices': ['sgd', 'adamw', 'adam']},
+                    'weight_decay': {'type': 'float', 'range': (1e-5, 1e-2), 'log_scale': True},
+                    'momentum': {'type': 'float', 'range': (0.8, 0.95)},  # For SGD
+                })
+                
+            elif 'efficientnet' in architecture_name.lower():
+                # EfficientNet prefers RMSprop and specific weight decay
+                base_space.update({
+                    'learning_rate': {'type': 'float', 'range': (1e-5, 1e-2), 'log_scale': True},
+                    'optimizer': {'type': 'categorical', 'choices': ['rmsprop', 'adamw', 'adam']},
+                    'weight_decay': {'type': 'float', 'range': (1e-6, 1e-4), 'log_scale': True},
+                    'dropout_rate': {'type': 'float', 'range': (0.1, 0.4)},  # EfficientNet benefits from dropout
+                })
+                
+            elif 'convnext' in architecture_name.lower():
+                # ConvNeXt uses higher weight decay and specific learning rates
+                base_space.update({
+                    'learning_rate': {'type': 'float', 'range': (1e-4, 5e-3), 'log_scale': True},
+                    'optimizer': {'type': 'categorical', 'choices': ['adamw']},  # ConvNeXt paper uses AdamW
+                    'weight_decay': {'type': 'float', 'range': (1e-3, 1e-1), 'log_scale': True},  # Higher weight decay
+                    'lr_scheduler': {'type': 'categorical', 'choices': ['cosine']},  # Cosine annealing
+                })
+                
+            elif 'mobilenet' in architecture_name.lower():
+                # MobileNet is lightweight, can use larger batches and different optimizers
+                base_space.update({
+                    'learning_rate': {'type': 'float', 'range': (1e-4, 1e-2), 'log_scale': True},
+                    'optimizer': {'type': 'categorical', 'choices': ['adam', 'adamw', 'rmsprop']},
+                    'weight_decay': {'type': 'float', 'range': (1e-6, 1e-3), 'log_scale': True},
+                    'batch_size': {'type': 'categorical', 'choices': [32, 64, 128, 256]},  # Can handle larger batches
+                    'dropout_rate': {'type': 'float', 'range': (0.0, 0.3)},  # Less dropout needed
+                })
+                
+            elif 'densenet' in architecture_name.lower():
+                # DenseNet has many parameters, needs careful regularization
+                base_space.update({
+                    'learning_rate': {'type': 'float', 'range': (1e-5, 1e-2), 'log_scale': True},
+                    'optimizer': {'type': 'categorical', 'choices': ['adam', 'adamw', 'sgd']},
+                    'weight_decay': {'type': 'float', 'range': (1e-5, 1e-2), 'log_scale': True},
+                    'dropout_rate': {'type': 'float', 'range': (0.1, 0.5)},  # Benefits from dropout
+                    'batch_size': {'type': 'categorical', 'choices': [16, 32, 64]},  # Memory intensive
+                })
+        
+        # Dataset-specific adjustments
+        dataset_name = self.config.get('dataset_name', 'emotions')
+        if dataset_name == 'emotions':
+            # Small grayscale images, can use higher learning rates
+            base_space['learning_rate'] = {'type': 'float', 'range': (1e-4, 1e-2), 'log_scale': True}
+            base_space['batch_size'] = {'type': 'categorical', 'choices': [32, 64, 128, 256]}
+        elif dataset_name == 'flowers':
+            # Large color images, need smaller learning rates and batches
+            base_space['learning_rate'] = {'type': 'float', 'range': (1e-5, 1e-3), 'log_scale': True}
+            base_space['batch_size'] = {'type': 'categorical', 'choices': [8, 16, 32]}
+            base_space['weight_decay'] = {'type': 'float', 'range': (1e-5, 1e-2), 'log_scale': True}
+        elif dataset_name == 'fashion':
+            # Small grayscale images, similar to emotions but different complexity
+            base_space['learning_rate'] = {'type': 'float', 'range': (1e-4, 1e-2), 'log_scale': True}
+            base_space['batch_size'] = {'type': 'categorical', 'choices': [64, 128, 256]}
+        
+        return base_space
     
     def _generate_insights(self, results: Dict[str, Any]) -> Dict[str, Any]:
         """Generate insights from results"""
