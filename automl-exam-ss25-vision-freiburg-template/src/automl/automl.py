@@ -149,39 +149,66 @@ class AutoMLPipeline:
         """Phase 2: Select architectures and allocate budget"""
         
         with Timer("Architecture selection") as timer:
-            # Use provided architectures or select strategically
-            if architectures is None:
-                # Select architectures based on dataset characteristics
-                complexity = self.dataset_info['characteristics']['complexity_score']
-                num_samples = self.dataset_info['characteristics']['num_samples']
-                
-                if num_samples < 10000:  # Small dataset - use fewer, faster models
-                    selected_architectures = ['resnet18', 'efficientnet_b0', 'mobilenetv3_small_100']
-                elif complexity > 6.0:  # Complex dataset - use more sophisticated models
-                    selected_architectures = ['resnet34', 'efficientnet_b1', 'convnext_tiny', 'densenet121']
-                else:  # Medium complexity - balanced selection
-                    selected_architectures = ['resnet18', 'efficientnet_b0', 'convnext_tiny', 'densenet121']
-            else:
-                selected_architectures = architectures
+        # 1) Choose your candidates
+        if architectures is None:
+            # Select architectures based on dataset characteristics
+            complexity = self.dataset_info['characteristics']['complexity_score']
+            num_samples = self.dataset_info['characteristics']['num_samples']
             
-            self.logger.info(f"Selected architectures: {selected_architectures}")
-            
-            # Register architectures with early stopping engine
-            for arch in selected_architectures:
-                self.early_stopping.register_architecture(arch)
-            
-            # Start budget allocation
-            self.budget_manager.start_execution(selected_architectures)
-            
-            # Print initial budget status
-            self.budget_manager.print_budget_status()
-            
-            self.execution_log.append({
-                'phase': 'architecture_selection',
-                'duration_seconds': timer.elapsed,
-                'selected_architectures': selected_architectures
-            })
+            if num_samples < 10000:  # Small dataset
+                selected_architectures = ['resnet18', 'efficientnet_b0', 'mobilenetv3_small_100']
+            elif complexity > 6.0:   # Complex dataset
+                selected_architectures = ['resnet34', 'efficientnet_b1', 'convnext_tiny', 'densenet121']
+            else:                    # Medium complexity
+                selected_architectures = ['resnet18', 'efficientnet_b0', 'convnext_tiny', 'densenet121']
+        else:
+            selected_architectures = architectures
         
+        self.logger.info(f"Selected architectures (pre–ZeroCost): {selected_architectures}")
+        
+        
+        # 2) Zero‑Cost NAS filtering
+        try:
+            from .zero_cost_nas import score_model
+            zero_cost_method = self.config.get('zero_cost_method', 'synflow')
+            top_k = self.config.get('zero_cost_top_k', len(selected_architectures))
+            scores = []
+            for arch in selected_architectures:
+                # build model factory function
+                model_fn = lambda name=arch: self.model_factory.create_model(name)
+                # determine dummy input shape from your dataset
+                c = self.dataset_info['characteristics']['channels']
+                h = self.dataset_info['characteristics']['image_height']
+                w = self.dataset_info['characteristics']['image_width']
+                score = score_model(model_fn,
+                                    method=zero_cost_method,
+                                    input_shape=(1, c, h, w))
+                scores.append((arch, score))
+                self.logger.debug(f"Zero‑Cost score [{zero_cost_method}] for {arch}: {score:.4f}")
+            # keep only top_k
+            scores.sort(key=lambda x: x[1], reverse=True)
+            selected_architectures = [arch for arch, _ in scores[:top_k]]
+            self.logger.info(f"Architectures after Zero‑Cost NAS filter (top {top_k}): {selected_architectures}")
+        except Exception as e:
+            self.logger.warning(f"Zero‑Cost NAS filtering failed, continuing with full set: {e}")
+        
+        
+        # 3) Register for early stopping & budget allocation
+        self.logger.info(f"Final architectures for HPO & training: {selected_architectures}")
+        for arch in selected_architectures:
+            self.early_stopping.register_architecture(arch)
+        
+        # Start budget allocation
+        self.budget_manager.start_execution(selected_architectures)
+        # Print initial budget status
+        self.budget_manager.print_budget_status()
+        
+        self.execution_log.append({
+            'phase': 'architecture_selection',
+            'duration_seconds': timer.elapsed,
+            'selected_architectures': selected_architectures
+        })
+    
         return selected_architectures
     
     def _phase3_architecture_search(self, architectures: List[str]) -> Dict[str, Any]:
