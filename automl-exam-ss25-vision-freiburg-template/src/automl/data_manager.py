@@ -20,7 +20,7 @@ import matplotlib.pyplot as plt
 from PIL import Image
 
 from .utils import AutoMLConfig, Timer, ensure_dir
-from .datasets import EmotionsDataset, FashionDataset, FlowersDataset
+from .datasets import EmotionsDataset, FashionDataset, FlowersDataset, SkinCancerDataset
 
 class AlbumentationsWrapper:
     """Wrapper to make Albumentations compatible with torchvision-style datasets"""
@@ -150,6 +150,8 @@ class DatasetCharacteristics:
             score += 2.0  # Emotion recognition is inherently difficult
         elif 'flower' in dataset_name:
             score += 1.5  # Fine-grained classification is challenging
+        elif 'skin_cancer' in dataset_name:
+            score += 1.8  # Medical image classification is challenging
         elif 'fashion' in dataset_name:
             score += 1.0  # Fashion items have moderate complexity
         
@@ -317,7 +319,8 @@ class AutoMLDataManager:
         self.dataset_classes = {
             'emotions': EmotionsDataset,
             'fashion': FashionDataset,
-            'flowers': FlowersDataset
+            'flowers': FlowersDataset,
+            'skin_cancer': SkinCancerDataset
         }
         
         # Initialize dataset

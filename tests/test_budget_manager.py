@@ -55,7 +55,7 @@ def test_budget_manager():
         
         # Test 2: Initial resource allocation
         print("\n2. Testing initial resource allocation...")
-        test_architectures = ['resnet18', 'efficientnet_b0', 'densenet121', 'mobilenetv3_large_100']
+        test_architectures = ['resnet18', 'efficientnet_b0', 'densenet121', 'mobilenetv3_small_100']
         
         budget_manager.start_execution(test_architectures)
         
@@ -96,7 +96,7 @@ def test_budget_manager():
                 'stop_reason': 'poor_performance'
             },
             {
-                'architecture': 'mobilenetv3_large_100',
+                'architecture': 'mobilenetv3_small_100',
                 'performance_progression': [0.58, 0.68, 0.74, 0.76],
                 'time_progression': [0.3, 0.6, 0.9, 1.2],
                 'memory_usage': 1.5,

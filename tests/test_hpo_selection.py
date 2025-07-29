@@ -57,7 +57,7 @@ def test_hpo_selection_engine():
             },
             {
                 'name': 'MobileNet + Simple Dataset + Limited Time',
-                'architecture': 'mobilenetv3_large_100',
+                'architecture': 'mobilenetv3_small_100',
                 'characteristics': {'family': 'mobilenet', 'complexity_score': 2.5, 'speed': 'very_fast'},
                 'dataset_complexity': 2.0,
                 'available_time': 1.5,

@@ -23,7 +23,7 @@ class ModelFactory:
         'efficientnet': ['efficientnet_b0', 'efficientnet_b1', 'efficientnet_b2', 'efficientnet_b3'],
         'convnext': ['convnext_tiny', 'convnext_small', 'convnext_base'],
         'regnet': ['regnetx_002', 'regnetx_004', 'regnetx_006', 'regnetx_008'],
-        'mobilenet': ['mobilenetv3_large_100', 'mobilenetv3_large_100'],
+        'mobilenet': ['mobilenetv3_small_100', 'mobilenetv3_small_100'],
         'densenet': ['densenet121', 'densenet161', 'densenet169']
     }
     
@@ -63,7 +63,7 @@ class ModelFactory:
         'resnet': ['resnet18', 'resnet34'],
         'efficientnet': ['efficientnet_b0', 'efficientnet_b1'], 
         'convnext': ['convnext_tiny'],
-        'mobilenet': ['mobilenetv3_large_100'],
+        'mobilenet': ['mobilenetv3_small_100'],
         'densenet': ['densenet121']
     }
     
@@ -72,7 +72,7 @@ class ModelFactory:
         'resnet18', 'resnet34',
         'efficientnet_b0', 'efficientnet_b1',
         'convnext_tiny',
-        'mobilenetv3_large_100', 
+        'mobilenetv3_small_100', 
         'densenet121'
     ]
     
@@ -123,7 +123,7 @@ class ModelFactory:
             'typical_lr': 4e-3,
             'good_for': ['modern_architecture', 'complex_patterns']
         },
-        'mobilenetv3_large_100': {
+        'mobilenetv3_small_100': {
             'family': 'mobilenet',
             'size': 'small',
             'speed': 'very_fast',
@@ -323,8 +323,8 @@ class ModelFactory:
     def get_models_by_speed(self, speed_preference: str = 'fast') -> List[str]:
         """Get models filtered by training speed"""
         speed_map = {
-            'very_fast': ['mobilenetv3_large_100'],
-            'fast': ['resnet18', 'mobilenetv3_large_100'],
+            'very_fast': ['mobilenetv3_small_100'],
+            'fast': ['resnet18', 'mobilenetv3_small_100'],
             'medium': ['resnet34', 'efficientnet_b0', 'efficientnet_b1', 'convnext_tiny'],
             'slow': ['densenet121']
         }
@@ -341,7 +341,7 @@ class ModelFactory:
         
         # Simple heuristic based on dataset complexity and size
         if complexity == 'low' and size == 'small':
-            return ['resnet18', 'mobilenetv3_large_100', 'efficientnet_b0']
+            return ['resnet18', 'mobilenetv3_small_100', 'efficientnet_b0']
         elif complexity == 'high' and size == 'large':
             return ['efficientnet_b1', 'convnext_tiny', 'densenet121', 'resnet34']
         else:  # medium complexity/size

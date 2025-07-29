@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Dataset Analysis Script
-Analyzes all three datasets (emotions, fashion, flowers) and prints their properties
+Analyzes all four datasets (emotions, fashion, flowers, skin_cancer) and prints their properties
 """
 
 import pandas as pd
@@ -162,13 +162,13 @@ def main():
     """Main function to analyze all datasets"""
     
     print("🔍 DATASET ANALYSIS SCRIPT")
-    print("Analyzing emotions, fashion, and flowers datasets...")
+    print("Analyzing emotions, fashion, flowers, and skin_cancer datasets...")
     
-    datasets = ['emotions', 'fashion', 'flowers']
+    datasets = ['emotions', 'fashion', 'flowers', 'skin_cancer']
     results = {}
     
     for dataset in datasets:
-        result = analyze_dataset(dataset)
+        result = analyze_dataset(dataset, data_root="automl-exam-ss25-vision-freiburg-template/data")
         if result:
             results[dataset] = result
     

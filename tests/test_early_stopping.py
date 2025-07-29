@@ -48,7 +48,7 @@ def test_early_stopping_engine():
         
         # Test 2: Register architectures
         print("\n2. Testing architecture registration...")
-        test_architectures = ['resnet18', 'efficientnet_b0', 'densenet121', 'mobilenetv3_large_100']
+        test_architectures = ['resnet18', 'efficientnet_b0', 'densenet121', 'mobilenetv3_small_100']
         
         for arch in test_architectures:
             early_stopper.register_architecture(arch)
@@ -125,7 +125,7 @@ def test_early_stopping_engine():
                 'noise': 0.03,
                 'description': 'Slow starter, decent final'
             },
-            'mobilenetv3_large_100': {
+            'mobilenetv3_small_100': {
                 'base_acc': 0.58,
                 'final_acc': 0.75,
                 'convergence_rate': 6,

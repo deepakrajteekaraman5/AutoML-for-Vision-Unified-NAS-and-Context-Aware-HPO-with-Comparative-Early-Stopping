@@ -67,7 +67,7 @@ Examples:
     parser.add_argument(
         '--dataset',
         type=str,
-        choices=['emotions', 'fashion', 'flowers'],
+        choices=['emotions', 'fashion', 'flowers', 'skin_cancer'],
         default='emotions',
         help='Dataset to use for training (default: emotions)'
     )
@@ -93,7 +93,7 @@ Examples:
         '--architectures',
         nargs='+',
         choices=['resnet18', 'resnet34', 'efficientnet_b0', 'efficientnet_b1', 
-                'convnext_tiny', 'mobilenetv3_large_100', 'densenet121'],
+                'convnext_tiny', 'mobilenetv3_small_100', 'densenet121'],
         help='Specific architectures to evaluate (default: auto-select based on dataset)'
     )
     
@@ -205,6 +205,13 @@ def setup_dataset_config(dataset_name: str) -> dict:
             'channels': 3,  # Color
             'image_size': 512,  # FIXED: Was 224, now 512
             'csv_file': 'flowers/train.csv'
+        },
+        'skin_cancer': {
+            'dataset_name': 'skin_cancer',
+            'num_classes': 7,
+            'channels': 3,  # Color
+            'image_size': 450,
+            'csv_file': 'skin_cancer/train.csv'
         }
     }
     
@@ -304,6 +311,8 @@ def estimate_runtime(config: AutoMLConfig, num_architectures: int) -> str:
         seconds_per_epoch = 10  # Small images, fast training
     elif config.get('dataset_name') == 'fashion':
         seconds_per_epoch = 8   # Very small images
+    elif config.get('dataset_name') == 'skin_cancer':
+        seconds_per_epoch = 25  # Medium-large images
     else:  # flowers
         seconds_per_epoch = 30  # Larger images
     

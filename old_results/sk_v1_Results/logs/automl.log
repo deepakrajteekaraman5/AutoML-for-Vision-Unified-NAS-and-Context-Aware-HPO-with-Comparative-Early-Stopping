@@ -4,7 +4,7 @@
 2025-07-26 16:43:46 - AutoML - INFO -  Initializing AutoML Pipeline...
 2025-07-26 16:43:46 - AutoML.DataManager - INFO - Initialized DataManager for emotions dataset
 2025-07-26 16:43:46 - AutoML.ModelFactory - INFO - ModelFactory initialized for emotions: 7 classes, 1 channels, 48x48 images
-2025-07-26 16:43:46 - AutoML.ModelFactory - INFO - Strategic models available: ['resnet18', 'resnet34', 'efficientnet_b0', 'efficientnet_b1', 'convnext_tiny', 'mobilenetv3_large_100', 'densenet121']
+2025-07-26 16:43:46 - AutoML.ModelFactory - INFO - Strategic models available: ['resnet18', 'resnet34', 'efficientnet_b0', 'efficientnet_b1', 'convnext_tiny', 'mobilenetv3_small_100', 'densenet121']
 2025-07-26 16:43:46 - AutoML - INFO -  Using GPU: NVIDIA GeForce RTX 3060 Laptop GPU (6.4GB)
 2025-07-26 16:43:46 - AutoML.Trainer - INFO - Trainer initialized - Device: cuda
 2025-07-26 16:43:46 - AutoML.Trainer - INFO - Max epochs: 50, Min epochs: 5
@@ -2690,7 +2690,7 @@ RuntimeError: Couldn't open shared file mapping: <torch_35844_1771652372_6>, err
 2025-07-27 00:35:45 - AutoML - INFO -  Initializing AutoML Pipeline...
 2025-07-27 00:35:45 - AutoML.DataManager - INFO - Initialized DataManager for emotions dataset
 2025-07-27 00:35:45 - AutoML.ModelFactory - INFO - ModelFactory initialized for emotions: 7 classes, 1 channels, 48x48 images
-2025-07-27 00:35:45 - AutoML.ModelFactory - INFO - Strategic models available: ['resnet18', 'resnet34', 'efficientnet_b0', 'efficientnet_b1', 'convnext_tiny', 'mobilenetv3_large_100', 'densenet121']
+2025-07-27 00:35:45 - AutoML.ModelFactory - INFO - Strategic models available: ['resnet18', 'resnet34', 'efficientnet_b0', 'efficientnet_b1', 'convnext_tiny', 'mobilenetv3_small_100', 'densenet121']
 2025-07-27 00:35:45 - AutoML - INFO -  Using GPU: NVIDIA GeForce RTX 3060 Laptop GPU (6.4GB)
 2025-07-27 00:35:45 - AutoML.Trainer - INFO - Trainer initialized - Device: cuda
 2025-07-27 00:35:45 - AutoML.Trainer - INFO - Max epochs: 50, Min epochs: 5

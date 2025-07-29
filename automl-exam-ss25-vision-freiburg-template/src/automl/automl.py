@@ -156,7 +156,7 @@ class AutoMLPipeline:
                 num_samples = self.dataset_info['characteristics']['num_samples']
                 
                 if num_samples < 10000:  # Skin cancer (7k), Flowers (5k)
-                    selected_architectures = ['resnet18', 'efficientnet_b0', 'mobilenetv3_large_100']  # Use large, not small
+                    selected_architectures = ['resnet18', 'efficientnet_b0', 'mobilenetv3_small_100']  # Use large, not small
                 elif num_samples > 50000:  # Fashion (60k) - add ViT for large datasets
                     selected_architectures = ['resnet18', 'efficientnet_b1', 'convnext_tiny', 'vit_small']
                 elif complexity > 6.0:  # Complex datasets like emotions (28k)
@@ -544,6 +544,13 @@ class AutoMLPipeline:
             base_space['batch_size'] = {'type': 'categorical', 'choices': [4, 8, 16]}  # Even smaller batches for 512x512
             base_space['weight_decay'] = {'type': 'float', 'range': (1e-5, 1e-2), 'log_scale': True}
             base_space['max_epochs'] = {'type': 'int', 'range': (10, 25)}  # Fewer epochs for large dataset
+        elif dataset_name == 'skin_cancer':
+            # Medium-large color images (450x450), medical classification needs careful tuning
+            base_space['learning_rate'] = {'type': 'float', 'range': (1e-5, 1e-3), 'log_scale': True}
+            base_space['batch_size'] = {'type': 'categorical', 'choices': [8, 16, 32]}  # Smaller batches for 450x450
+            base_space['weight_decay'] = {'type': 'float', 'range': (1e-5, 1e-2), 'log_scale': True}
+            base_space['max_epochs'] = {'type': 'int', 'range': (15, 35)}  # Medical images may need more epochs
+            base_space['dropout_rate'] = {'type': 'float', 'range': (0.1, 0.4)}  # Medical images benefit from regularization
         elif dataset_name == 'fashion':
             # Small grayscale images, similar to emotions but different complexity
             base_space['learning_rate'] = {'type': 'float', 'range': (1e-4, 1e-2), 'log_scale': True}

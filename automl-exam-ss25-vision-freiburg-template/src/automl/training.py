@@ -107,8 +107,13 @@ class Trainer:
                 best_val_accuracy = 0.0
                 epoch_times = []
                 
-                # Training loop
-                for epoch in range(1, epochs_to_run + 1):
+                # Training loop with progress bar
+                epoch_pbar = tqdm(range(1, epochs_to_run + 1), 
+                                desc=f"Training {architecture_name}", 
+                                unit="epoch",
+                                leave=True)
+                
+                for epoch in epoch_pbar:
                     epoch_start_time = time.time()
                     
                     # Training phase
@@ -120,6 +125,14 @@ class Trainer:
                     val_metrics = self._validate_epoch(
                         model, val_loader, criterion, epoch
                     )
+                    
+                    # Update progress bar with current metrics
+                    epoch_pbar.set_postfix({
+                        'Train Acc': f"{train_metrics['accuracy']:.3f}",
+                        'Val Acc': f"{val_metrics['accuracy']:.3f}",
+                        'Val Loss': f"{val_metrics['loss']:.3f}",
+                        'Best': f"{best_val_accuracy:.3f}"
+                    })
                     
                     # Learning rate scheduling
                     if scheduler:
@@ -229,7 +242,13 @@ class Trainer:
         correct_predictions = 0
         total_samples = 0
         
-        for batch_idx, (images, labels) in enumerate(dataloader):
+        # Progress bar for training batches
+        train_pbar = tqdm(dataloader, 
+                         desc=f"Train Epoch {epoch}", 
+                         leave=False,
+                         unit="batch")
+        
+        for batch_idx, (images, labels) in enumerate(train_pbar):
             images, labels = images.to(self.device), labels.to(self.device)
             
             # Zero gradients
@@ -249,12 +268,13 @@ class Trainer:
             total_samples += labels.size(0)
             correct_predictions += (predicted == labels).sum().item()
             
-            # Log batch progress for very verbose debugging
-            if batch_idx % 100 == 0:
-                self.logger.debug(
-                    f"Epoch {epoch}, Batch {batch_idx}/{len(dataloader)}, "
-                    f"Loss: {loss.item():.4f}"
-                )
+            # Update progress bar with current metrics
+            current_acc = correct_predictions / total_samples
+            current_loss = running_loss / (batch_idx + 1)
+            train_pbar.set_postfix({
+                'Loss': f"{current_loss:.4f}",
+                'Acc': f"{current_acc:.3f}"
+            })
         
         # Calculate epoch metrics
         epoch_loss = running_loss / len(dataloader)
@@ -277,8 +297,14 @@ class Trainer:
         correct_predictions = 0
         total_samples = 0
         
+        # Progress bar for validation batches
+        val_pbar = tqdm(dataloader, 
+                       desc=f"Val Epoch {epoch}", 
+                       leave=False,
+                       unit="batch")
+        
         with torch.no_grad():
-            for images, labels in dataloader:
+            for batch_idx, (images, labels) in enumerate(val_pbar):
                 images, labels = images.to(self.device), labels.to(self.device)
                 
                 # Forward pass
@@ -290,6 +316,14 @@ class Trainer:
                 _, predicted = torch.max(outputs.data, 1)
                 total_samples += labels.size(0)
                 correct_predictions += (predicted == labels).sum().item()
+                
+                # Update progress bar with current metrics
+                current_acc = correct_predictions / total_samples
+                current_loss = running_loss / (batch_idx + 1)
+                val_pbar.set_postfix({
+                    'Loss': f"{current_loss:.4f}",
+                    'Acc': f"{current_acc:.3f}"
+                })
         
         # Calculate epoch metrics
         epoch_loss = running_loss / len(dataloader)
@@ -483,6 +517,10 @@ class Trainer:
         with torch.no_grad():
             for images, labels in test_loader:
                 images, labels = images.to(self.device), labels.to(self.device)
+                
+                # FIX: Ensure correct data types
+                images = images.float()  # Ensure float32
+                labels = labels.long()   # Ensure long (int64)
                 
                 # Forward pass
                 outputs = model(images)
