@@ -11,6 +11,7 @@ import os
 from pathlib import Path
 import logging
 import time
+from torch.multiprocessing import freeze_support
 
 # FIXED: Unicode encoding setup for Windows
 if sys.platform.startswith('win'):
@@ -67,9 +68,24 @@ Examples:
     parser.add_argument(
         '--dataset',
         type=str,
-        choices=['emotions', 'fashion', 'flowers'],
+        choices=['emotions', 'fashion', 'flowers', 'skin_cancer'],
         default='emotions',
         help='Dataset to use for training (default: emotions)'
+    )
+    
+    parser.add_argument(
+        '--plot_format',
+        type=str,
+        choices=['png','pdf','svg'],
+        default='png',
+        help='Format for saved plots (default: png)'
+    )
+
+    parser.add_argument(
+        '--num_workers',
+        type=int,
+        default=2,
+        help='Number of DataLoader worker processes (default: 2)'
     )
     
     # Data directory
@@ -171,14 +187,6 @@ Examples:
         help='Disable plotting and visualization'
     )
     
-    parser.add_argument(
-        '--plot_format',
-        type=str,
-        choices=['png', 'pdf', 'svg'],
-        default='png',
-        help='Format for saved plots (default: png)'
-    )
-    
     return parser.parse_args()
 
 def setup_dataset_config(dataset_name: str) -> dict:
@@ -205,6 +213,13 @@ def setup_dataset_config(dataset_name: str) -> dict:
             'channels': 3,  # Color
             'image_size': 224,
             'csv_file': 'flowers/train.csv'
+        },
+        'skin_cancer': {
+            'dataset_name': 'skin_cancer',
+            'num_classes': 7,
+            'channels': 3,  # Color
+            'image_size': 450,
+            'csv_file': 'skin_cancer/train.csv'
         }
     }
     
@@ -442,7 +457,8 @@ def main():
         results = pipeline.run(
             dataset_root=args.data_root,
             architectures=selected_architectures,
-            save_results=True
+            save_results=True,
+            num_workers=args.num_workers  
         )
         
         # Calculate total execution time
@@ -506,5 +522,6 @@ def main():
         return 1
 
 if __name__ == "__main__":
+    freeze_support()
     exit_code = main()
     sys.exit(exit_code)

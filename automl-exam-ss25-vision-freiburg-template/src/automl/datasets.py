@@ -177,3 +177,16 @@ class FashionDataset(BaseVisionDataset):
     height = 28
     channels = 1
     num_classes = 10
+
+
+class SkinCancerDataset(BaseVisionDataset):
+    """Skin Cancer Dataset.
+
+    This dataset contains images of skin lesions. The task is to classify what kind of skin lesion it is.
+    The dataset contains 7 classes of skin lesions for dermatological diagnosis.
+    """
+    _dataset_name = "skin_cancer"
+    width = 450
+    height = 450
+    channels = 3
+    num_classes = 7

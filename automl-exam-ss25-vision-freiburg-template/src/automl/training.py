@@ -172,8 +172,8 @@ class Trainer:
                             memory_used_gb=self._estimate_memory_usage(model)
                         )
                     
-                    # Log progress
-                    if epoch % 5 == 0 or epoch == epochs_to_run:
+                    # Log progress - REDUCED FREQUENCY
+                    if epoch % 10 == 0 or epoch == epochs_to_run:
                         self.logger.info(
                             f"Epoch {epoch}/{epochs_to_run} - "
                             f"Train Acc: {train_metrics['accuracy']:.4f}, "

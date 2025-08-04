@@ -32,6 +32,7 @@ class AutoMLConfig:
             # Basic settings
             'random_seed': 42,
             'log_level': 'INFO',
+            'verbose_logging': True,  # NEW: Set to False for quiet mode
             'device': 'auto',  # auto, cpu, cuda
             
             # Directory settings

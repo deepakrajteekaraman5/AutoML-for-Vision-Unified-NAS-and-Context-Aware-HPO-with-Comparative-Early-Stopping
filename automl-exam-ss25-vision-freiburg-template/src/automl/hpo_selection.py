@@ -698,16 +698,16 @@ class MetaHPOSelector:
         hpo_method = self.hpo_methods[hpo_config.method](hpo_config)
         
         # Run optimization with progress tracking
-        self.logger.info(f"🚀 Starting HPO for {architecture_name} with {hpo_config.n_trials} trials")
+        self.logger.info(f" Starting HPO for {architecture_name} with {hpo_config.n_trials} trials")
         start_time = time.time()
         
         result = hpo_method.optimize(objective_function, search_space, architecture_name)
         
         elapsed_time = time.time() - start_time
-        self.logger.info(f"✅ HPO completed for {architecture_name} in {elapsed_time:.1f}s")
+        self.logger.info(f" HPO completed for {architecture_name} in {elapsed_time:.1f}s")
         self.logger.info(f"   Best score: {result.best_score:.4f} ({result.n_trials_completed} trials)")
         if result.early_stopped:
-            self.logger.info(f"   🎯 Stopped early due to excellent performance!")
+            self.logger.info(f"    Stopped early due to excellent performance!")
         
         # Update historical performance
         self.method_performance_history[result.method_used.value].append(result.method_efficiency)

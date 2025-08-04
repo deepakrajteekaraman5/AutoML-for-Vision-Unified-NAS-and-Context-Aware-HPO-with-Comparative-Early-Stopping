@@ -1,0 +1,58 @@
+{
+  "pipeline_config": {
+    "dataset_name": "emotions",
+    "time_budget_hours": 1.0,
+    "architectures_evaluated": [
+      "resnet18",
+      "efficientnet_b0"
+    ],
+    "total_execution_time_hours": 1.230631072388755
+  },
+  "dataset_analysis": {
+    "dataset_name": "emotions",
+    "num_train": 22967,
+    "num_val": 5742,
+    "num_test": 7178,
+    "characteristics": {
+      "name": "emotions",
+      "num_samples": 28709,
+      "num_classes": 7,
+      "image_width": 48,
+      "image_height": 48,
+      "channels": 1,
+      "image_size_pixels": 2304,
+      "is_grayscale": true,
+      "is_color": false,
+      "class_distribution": {
+        "class_counts": {
+          "6": 20,
+          "4": 15,
+          "2": 17,
+          "0": 14,
+          "3": 19,
+          "5": 11,
+          "1": 4
+        },
+        "num_classes_actual": 7,
+        "is_balanced": false,
+        "most_common_class": 6,
+        "least_common_class": 1
+      },
+      "complexity_score": 1.0,
+      "memory_per_sample_mb": 0.0087890625,
+      "recommended_batch_size": 64,
+      "analysis_time": 0.034009456634521484
+    },
+    "setup_time": 7.312603950500488
+  },
+  "architecture_search_results": {
+    "resnet18": {
+      "hpo_method_used": "random_search",
+      "best_score": 0.5679205851619644,
+      "best_hyperparameters": {
+        "learning_rate": 0.01684784998676231,
+        "optimizer": "adamw",
+        "weight_decay": 0.00026630616588658296,
+        "batch_size": 32,
+        "dropout_rate": 0.5535993243807977,
+        "pretrained": 

@@ -7,6 +7,7 @@ Intelligent AutoML Pipeline for Image Classification with Adaptive Architecture 
 import logging
 import time
 import json
+from torch.multiprocessing import freeze_support
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Any
 import torch
@@ -47,6 +48,12 @@ class AutoMLPipeline:
         self.early_stopping = ComparativeEarlyStopping(config)
         self.hpo_selector = MetaHPOSelector(config)
         
+        # NEW: Set up component integration
+        self.budget_manager.set_integration_components(
+            early_stopping_engine=self.early_stopping,
+            hpo_selector=self.hpo_selector
+        )
+        
         # Pipeline state
         self.dataset_info = None
         self.architecture_results = {}
@@ -57,15 +64,17 @@ class AutoMLPipeline:
         self.execution_log = []
         self.decision_log = []
         
-        self.logger.info("=== AutoML Pipeline Initialized ===")
+        self.logger.info("=== AutoML Pipeline Initialized with Advanced Integration ===")
         self.logger.info(f"Configuration: {config.get('dataset_name')} dataset")
         self.logger.info(f"Time budget: {config.get('time_budget_hours')} hours")
         self.logger.info(f"Target: {config.get('num_classes')} classes")
+        self.logger.info("Component coordination enabled")
     
     def run(self, 
             dataset_root: str = "data",
             architectures: Optional[List[str]] = None,
-            save_results: bool = True) -> Dict[str, Any]:
+            save_results: bool = True,
+            num_workers: int = 2) -> Dict[str, Any]:
         """
         Main execution pipeline
         
@@ -84,15 +93,21 @@ class AutoMLPipeline:
         try:
             # Phase 1: Dataset Analysis and Preparation
             self.logger.info("=== Phase 1: Dataset Analysis and Preparation ===")
+            print("DEBUG: Starting Phase 1")  # ADD THIS
             self.dataset_info = self._phase1_dataset_preparation(dataset_root)
+            print("DEBUG: Phase 1 complete")  # ADD THIS
             
             # Phase 2: Architecture Selection and Budget Allocation
             self.logger.info("=== Phase 2: Architecture Selection and Budget Allocation ===")
+            print("DEBUG: Starting Phase 2")  # ADD THIS
             selected_architectures = self._phase2_architecture_selection(architectures)
+            print("DEBUG: Phase 2 complete")  # ADD THIS
             
             # Phase 3: Intelligent Architecture Search with HPO
             self.logger.info("=== Phase 3: Intelligent Architecture Search ===")
-            architecture_results = self._phase3_architecture_search(selected_architectures)
+            print("DEBUG: About to start Phase 3")  # ADD THIS
+            architecture_results = self._phase3_architecture_search(selected_architectures, num_workers)
+            print("DEBUG: Phase 3 complete")  # ADD THIS
             
             # Phase 4: Final Training
             self.logger.info("=== Phase 4: Final Training ===")
@@ -172,31 +187,39 @@ class AutoMLPipeline:
             
             # Start budget allocation
             self.budget_manager.start_execution(selected_architectures)
+
+            print("DEBUG: budget_manager.start_execution completed")  # ADD THIS
+            print("DEBUG: About to print budget status")  # ADD THIS
             
             # Print initial budget status
             self.budget_manager.print_budget_status()
+            print("DEBUG: Budget status printed")  # ADD THIS
             
             self.execution_log.append({
                 'phase': 'architecture_selection',
                 'duration_seconds': timer.elapsed,
                 'selected_architectures': selected_architectures
             })
-        
+
+        print("DEBUG: _phase2_architecture_selection method ending")  # ADD THIS
         return selected_architectures
     
-    def _phase3_architecture_search(self, architectures: List[str]) -> Dict[str, Any]:
+    def _phase3_architecture_search(self, architectures: List[str], num_workers: int) -> Dict[str, Any]:
         """Phase 3: Run architecture search with intelligent HPO - FIXED VERSION"""
         
         with Timer("Architecture search") as timer:
             # Create data loaders (will be reused for all architectures)
             self.logger.info("Creating data loaders...")
+            print("DEBUG: About to create data loaders...")
             train_loader, val_loader, test_loader = self.data_manager.get_dataloaders(
                 batch_size=None,  # Will use recommended batch size
                 image_size=None,  # Will use dataset's native size
                 augmentation_strategy='auto',
-                num_workers=2
+                num_workers=num_workers
             )
             
+            print("DEBUG: Data loaders created successfully!")
+
             # Store for later use
             self.train_loader = train_loader
             self.val_loader = val_loader
@@ -205,9 +228,13 @@ class AutoMLPipeline:
             self.logger.info(f"  Train batches: {len(train_loader)}")
             self.logger.info(f"  Validation batches: {len(val_loader)}")
             self.logger.info(f"  Test batches: {len(test_loader)}")
+
+            print("DEBUG: About to create search space...") 
             
             # Define hyperparameter search space
             search_space = self._get_hyperparameter_search_space()
+
+            print("DEBUG: Search space created, starting architecture loop...")
             
             # Architecture search results
             architecture_results = {}
@@ -252,7 +279,13 @@ class AutoMLPipeline:
                 
                 # Store results
                 architecture_results[arch_name] = hpo_result
-                self.budget_manager.completed_architectures.add(arch_name)
+                
+                # Mark architecture as completed in budget manager
+                self.budget_manager.complete_architecture_hpo(
+                    arch_name, 
+                    hpo_result.best_score, 
+                    hpo_result.optimization_time / 3600.0  # Convert seconds to hours
+                )
 
                 self.logger.info(f"HPO completed for {arch_name}:")
                 self.logger.info(f"  Best score: {hpo_result.best_score:.4f}")

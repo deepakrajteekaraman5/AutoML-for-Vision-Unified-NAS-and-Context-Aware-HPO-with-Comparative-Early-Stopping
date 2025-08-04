@@ -2,10 +2,12 @@
 """
 Data Management System for AutoML Pipeline
 Wraps official dataset classes with AutoML-specific features
+FIXED: Albumentations compatibility issues
 """
 
 import os
 import logging
+import sys
 import numpy as np
 from pathlib import Path
 from typing import Dict, Tuple, List, Optional, Any, Union
@@ -18,9 +20,10 @@ import pandas as pd
 from collections import Counter
 import matplotlib.pyplot as plt
 from PIL import Image
+from tqdm import tqdm
 
 from .utils import AutoMLConfig, Timer, ensure_dir
-from .datasets import EmotionsDataset, FashionDataset, FlowersDataset
+from .datasets import EmotionsDataset, FashionDataset, FlowersDataset, SkinCancerDataset
 
 class AlbumentationsWrapper:
     """Wrapper to make Albumentations compatible with torchvision-style datasets"""
@@ -67,9 +70,10 @@ class DatasetCharacteristics:
             sample_size = min(1000, len(dataset))
             sample_indices = np.random.choice(len(dataset), sample_size, replace=False)
             
-            # Analyze class distribution
+            # Analyze class distribution with progress bar
             sample_labels = []
-            for idx in sample_indices[:100]:  # Use smaller sample for labels
+            print(f"Analyzing class distribution...")
+            for idx in tqdm(sample_indices[:100], desc="Sampling labels", leave=False):
                 _, label = dataset[idx]
                 sample_labels.append(label)
             
@@ -165,17 +169,17 @@ class DatasetCharacteristics:
         """Print a human-readable summary"""
         c = self.characteristics
         print(f"\n=== {c['name'].upper()} Dataset Summary ===")
-        print(f"📊 Samples: {c['num_samples']:,}")
-        print(f"🎯 Classes: {c['num_classes']}")
-        print(f"📐 Image Size: {c['image_width']}x{c['image_height']}x{c['channels']}")
-        print(f"🎨 Type: {'Grayscale' if c['is_grayscale'] else 'Color'}")
-        print(f"🧠 Complexity: {c['complexity_score']:.1f}/10")
-        print(f"💾 Memory/sample: {c['memory_per_sample_mb']:.3f} MB")
-        print(f"📦 Recommended batch size: {c['recommended_batch_size']}")
+        print(f"Samples: {c['num_samples']:,}")
+        print(f"Classes: {c['num_classes']}")
+        print(f"Image Size: {c['image_width']}x{c['image_height']}x{c['channels']}")
+        print(f"Type: {'Grayscale' if c['is_grayscale'] else 'Color'}")
+        print(f"Complexity: {c['complexity_score']:.1f}/10")
+        print(f"Memory/sample: {c['memory_per_sample_mb']:.3f} MB")
+        print(f"Recommended batch size: {c['recommended_batch_size']}")
         
         # Class distribution
         dist = c['class_distribution']
-        print(f"⚖️ Classes: {dist['num_classes_actual']} ({'Balanced' if dist['is_balanced'] else 'Imbalanced'})")
+        print(f"Classes: {dist['num_classes_actual']} ({'Balanced' if dist['is_balanced'] else 'Imbalanced'})")
 
 class AugmentationFactory:
     """Create augmentation strategies based on dataset characteristics"""
@@ -235,7 +239,7 @@ class AugmentationFactory:
             return 'medium'
     
     def _get_augmentations_by_strategy(self, strategy: str) -> List:
-        """Get augmentations based on strategy"""
+        """Get augmentations based on strategy - FIXED for Albumentations compatibility"""
         is_grayscale = self.characteristics.get_characteristic('is_grayscale')
         
         if strategy == 'light':
@@ -257,15 +261,20 @@ class AugmentationFactory:
                 ])
                 
         elif strategy == 'heavy':
+            # FIXED: Get image dimensions safely
+            image_height = self.characteristics.get_characteristic('image_height')
+            image_width = self.characteristics.get_characteristic('image_width')
+            
             augs = [
                 A.HorizontalFlip(p=0.5),
                 A.VerticalFlip(p=0.2),
                 A.Rotate(limit=25, p=0.7),
                 A.RandomBrightnessContrast(brightness_limit=0.3, contrast_limit=0.3, p=0.5),
-                A.GaussNoise(var_limit=(10.0, 50.0), p=0.2),
-                A.RandomResizedCrop(height=self.characteristics.get_characteristic('image_height'),
-                                  width=self.characteristics.get_characteristic('image_width'), 
-                                  scale=(0.8, 1.0), p=0.3),
+                # FIXED: Use variance_limit instead of var_limit
+                A.GaussNoise(variance_limit=(10.0, 50.0), p=0.2),
+                # FIXED: Use size parameter instead of height/width
+                A.RandomResizedCrop(size=(image_height, image_width), 
+                                   scale=(0.8, 1.0), p=0.3),
             ]
             
             # Add color augmentations for color images  
@@ -302,7 +311,8 @@ class AutoMLDataManager:
         self.dataset_classes = {
             'emotions': EmotionsDataset,
             'fashion': FashionDataset,
-            'flowers': FlowersDataset
+            'flowers': FlowersDataset,
+            'skin_cancer': SkinCancerDataset
         }
         
         # Initialize dataset
@@ -333,15 +343,15 @@ class AutoMLDataManager:
             # Create augmentation factory
             self.augmentation_factory = AugmentationFactory(self.characteristics)
             
-            # Split training data into train/validation
-            train_indices, val_indices = self._create_stratified_split(train_full, val_split)
+            # Split training data into train/validation and store indices
+            self.train_indices, self.val_indices = self._create_stratified_split(train_full, val_split)
             
-            self.logger.info(f"Data splits - Train: {len(train_indices)}, Val: {len(val_indices)}, Test: {len(test_dataset)}")
+            self.logger.info(f"Data splits - Train: {len(self.train_indices)}, Val: {len(self.val_indices)}, Test: {len(test_dataset)}")
         
         setup_info = {
             'dataset_name': self.dataset_name,
-            'num_train': len(train_indices),
-            'num_val': len(val_indices), 
+            'num_train': len(self.train_indices),
+            'num_val': len(self.val_indices), 
             'num_test': len(test_dataset),
             'characteristics': self.characteristics.characteristics,
             'setup_time': timer.elapsed
@@ -351,13 +361,15 @@ class AutoMLDataManager:
     
     def _create_stratified_split(self, dataset: Dataset, val_split: float) -> Tuple[List[int], List[int]]:
         """Create stratified train/validation split"""
-        # Extract labels for stratification
+        # Extract labels for stratification with progress bar
         labels = []
-        for i in range(len(dataset)):
+        print(f"Creating stratified train/validation split...")
+        for i in tqdm(range(len(dataset)), desc="Extracting labels", leave=False):
             _, label = dataset[i]
             labels.append(label)
         
         # Use stratified split to maintain class distribution
+        print(f"Performing stratified split ({int((1-val_split)*100)}% train, {int(val_split*100)}% val)...")
         splitter = StratifiedShuffleSplit(n_splits=1, test_size=val_split, random_state=self.config.get('random_seed', 42))
         train_indices, val_indices = next(splitter.split(range(len(dataset)), labels))
         
@@ -405,26 +417,26 @@ class AutoMLDataManager:
         train_full = self.dataset_class(root=root, split='train', transform=train_transform)
         test_full = self.dataset_class(root=root, split='test', transform=val_test_transform)
         
-        # Get train/val splits
-        train_indices, val_indices = self._create_stratified_split(
-            self.dataset_class(root=root, split='train', transform=None), 
-            self.config.get('validation_split', 0.2)
-        )
+        # Use stored train/val splits
+        if not hasattr(self, 'train_indices') or not hasattr(self, 'val_indices'):
+            raise ValueError("Must call setup_datasets() first to create train/val splits")
         
         # Create subset datasets
-        train_dataset = Subset(train_full, train_indices)
+        train_dataset = Subset(train_full, self.train_indices)
         val_dataset = Subset(
             self.dataset_class(root=root, split='train', transform=val_test_transform), 
-            val_indices
+            self.val_indices
         )
+
+        safe_num_workers = 0 if num_workers == 0 or sys.platform.startswith('win') else min(num_workers, 2)
         
         # Create DataLoaders
         train_loader = DataLoader(
             train_dataset,
             batch_size=batch_size,
             shuffle=True,
-            num_workers=num_workers,
-            pin_memory=torch.cuda.is_available(),
+            num_workers=safe_num_workers,
+            pin_memory=torch.cuda.is_available() and safe_num_workers > 0,
             drop_last=True
         )
         
@@ -432,16 +444,16 @@ class AutoMLDataManager:
             val_dataset,
             batch_size=batch_size,
             shuffle=False,
-            num_workers=num_workers,
-            pin_memory=torch.cuda.is_available()
+            num_workers=safe_num_workers,
+            pin_memory=torch.cuda.is_available() and safe_num_workers > 0
         )
         
         test_loader = DataLoader(
             test_full,
             batch_size=batch_size,
             shuffle=False,
-            num_workers=num_workers,
-            pin_memory=torch.cuda.is_available()
+            num_workers=safe_num_workers,
+            pin_memory=torch.cuda.is_available() and safe_num_workers > 0
         )
         
         self.logger.info(f"DataLoaders created successfully")
@@ -509,4 +521,4 @@ if __name__ == "__main__":
         if batch_idx == 0:
             break
     
-    print("✅ Data manager test complete!")
+    print("Data manager test complete!")
