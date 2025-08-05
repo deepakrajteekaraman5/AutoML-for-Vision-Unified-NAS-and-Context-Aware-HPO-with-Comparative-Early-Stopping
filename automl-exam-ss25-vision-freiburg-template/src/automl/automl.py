@@ -171,11 +171,9 @@ class AutoMLPipeline:
                 num_samples = self.dataset_info['characteristics']['num_samples']
                 
                 if num_samples < 10000:  # Small dataset - use fewer, faster models
-                    selected_architectures = ['resnet18', 'efficientnet_b0', 'mobilenetv3_small_100']
+                    selected_architectures = ['resnet18', 'efficientnet_b0', 'convnext_tiny']
                 elif complexity > 6.0:  # Complex dataset - use more sophisticated models
-                    selected_architectures = ['resnet34', 'efficientnet_b1', 'convnext_tiny', 'densenet121']
-                else:  # Medium complexity - balanced selection
-                    selected_architectures = ['resnet18', 'efficientnet_b0', 'convnext_tiny', 'densenet121']
+                    selected_architectures = ['resnet34', 'efficientnet_b1', 'convnext_tiny']
             else:
                 selected_architectures = architectures
             
