@@ -59,7 +59,7 @@ class AutoMLPipeline:
         
         self.logger.info("=== AutoML Pipeline Initialized ===")
         self.logger.info(f"Configuration: {config.get('dataset_name')} dataset")
-        self.logger.info(f"Time budget: {config.get('time_budget_hours')} hours")
+        self.logger.info(f"UNIFIED TIME: {config.get('hours_per_model')} hours per model")
         self.logger.info(f"Target: {config.get('num_classes')} classes")
     
     def run(self, 
@@ -146,27 +146,66 @@ class AutoMLPipeline:
         return dataset_info
     
     def _phase2_architecture_selection(self, architectures: Optional[List[str]]) -> List[str]:
-        """Phase 2: Select architectures and allocate budget"""
+        """Phase 2: Select architectures and allocate budget - UPDATED with strict time configuration"""
         
         with Timer("Architecture selection") as timer:
-            # Use provided architectures or select strategically
+            # Use provided architectures or select strategically based on DATASET COMPLEXITY
             if architectures is None:
-                # Select architectures based on dataset characteristics
+                # PRIMARY: Select architectures based on dataset complexity score
                 complexity = self.dataset_info['characteristics']['complexity_score']
                 num_samples = self.dataset_info['characteristics']['num_samples']
                 
-                if num_samples < 10000:  # Skin cancer (7k), Flowers (5k)
-                    selected_architectures = ['resnet18', 'efficientnet_b0', 'mobilenetv3_small_100']  # Use large, not small
-                elif num_samples > 50000:  # Fashion (60k) - add ViT for large datasets
-                    selected_architectures = ['resnet18', 'efficientnet_b1', 'convnext_tiny', 'vit_small']
-                elif complexity > 6.0:  # Complex datasets like emotions (28k)
-                    selected_architectures = ['resnet34', 'efficientnet_b1', 'convnext_tiny', 'densenet121']
-                else:  # Medium complexity - emotions (28k) likely falls here
-                    selected_architectures = ['resnet18', 'efficientnet_b0', 'convnext_tiny', 'densenet121']
+                # UPDATED: Use BudgetManager to determine number of models
+                num_models = BudgetManager.get_model_count_for_complexity(complexity)
+                
+                self.logger.info(f"=== STRICT TIME BUDGET CONFIGURATION ===")
+                self.logger.info(f"Dataset complexity: {complexity:.1f}/10")
+                self.logger.info(f"Selected model count: {num_models} models")
+                
+                # Calculate time budget
+                budget_info = self.budget_manager.calculate_total_budget(num_models)
+                self.logger.info(f"Time allocation:")
+                self.logger.info(f"  Per model: {budget_info['max_hours_per_model']} hours")
+                self.logger.info(f"  Architecture search: {budget_info['architecture_search_hours']} hours")
+                self.logger.info(f"  Final training: {budget_info['final_training_hours']} hours")
+                self.logger.info(f"  Buffer: {budget_info['buffer_hours']} hours")
+                self.logger.info(f"  TOTAL BUDGET: {budget_info['total_hours']} hours")
+                
+                # Select architectures based on complexity and model count
+                if complexity <= 3.0:  # Low complexity datasets
+                    if num_models == 3:
+                        selected_architectures = ['resnet18', 'mobilenetv3_small_100', 'efficientnet_b0']
+                    else:  # 4 models
+                        selected_architectures = ['resnet18', 'mobilenetv3_small_100', 'efficientnet_b0', 'densenet121']
+                    self.logger.info("Low complexity ==> Using lightweight models")
+                elif complexity <= 6.0:  # Medium complexity datasets  
+                    if num_models == 3:
+                        selected_architectures = ['resnet18', 'efficientnet_b0', 'convnext_tiny']
+                    else:  # 4 models
+                        selected_architectures = ['resnet18', 'efficientnet_b0', 'convnext_tiny', 'densenet121']
+                    self.logger.info("Medium complexity ==> Using balanced model mix")
+                else:  # High complexity datasets (> 6.0)
+                    if num_models == 3:
+                        selected_architectures = ['resnet34', 'efficientnet_b1', 'convnext_tiny']
+                    else:  # 4 models
+                        selected_architectures = ['resnet34', 'efficientnet_b1', 'convnext_tiny', 'densenet121']
+                    self.logger.info("High complexity ==> Using sophisticated models")
+                
+                # SECONDARY: Adjust for dataset size if needed
+                if num_samples < 5000:  # Very small datasets - reduce model complexity
+                    selected_architectures = ['resnet18', 'efficientnet_b0', 'mobilenetv3_small_100']
+                    self.logger.info("Small dataset override → Using simpler models to prevent overfitting")
             else:
                 selected_architectures = architectures
+                # Update time config based on provided architectures
+                num_models = len(selected_architectures)
+                budget_info = self.budget_manager.calculate_total_budget(num_models)
+                self.logger.info(f"Using provided {num_models} architectures")
+                self.logger.info(f"Total budget: {budget_info['total_hours']} hours")
             
-            self.logger.info(f"Selected architectures: {selected_architectures}")
+            self.logger.info(f"FINAL SELECTION: {selected_architectures}")
+            self.logger.info(f"Each model will be STRICTLY LIMITED to {self.config.get('hours_per_model')} hours")
+            # UNIFIED: No config setting needed - already handled by run_automl.py
             
             # Register architectures with early stopping engine
             for arch in selected_architectures:
@@ -181,13 +220,14 @@ class AutoMLPipeline:
             self.execution_log.append({
                 'phase': 'architecture_selection',
                 'duration_seconds': timer.elapsed,
-                'selected_architectures': selected_architectures
+                'selected_architectures': selected_architectures,
+                'time_budget_info': budget_info
             })
         
         return selected_architectures
     
     def _phase3_architecture_search(self, architectures: List[str]) -> Dict[str, Any]:
-        """Phase 3: Run architecture search with intelligent HPO - FIXED VERSION"""
+        """Phase 3: Run architecture search with STRICT TIME ENFORCEMENT"""
         
         with Timer("Architecture search") as timer:
             # Create data loaders (will be reused for all architectures)
@@ -221,9 +261,9 @@ class AutoMLPipeline:
             # Architecture search results
             architecture_results = {}
             
-            # FIXED: Process each architecture sequentially
+            # UPDATED: Process each architecture with STRICT TIME ENFORCEMENT
             for arch_name in architectures:
-                self.logger.info(f"Processing architecture: {arch_name}")
+                self.logger.info(f"=== PROCESSING ARCHITECTURE: {arch_name} ===")
                 
                 # Check if we should transition to final training before processing more architectures
                 if self.budget_manager.should_start_final_training():
@@ -235,60 +275,95 @@ class AutoMLPipeline:
                     self.logger.warning(f"Cannot start training {arch_name} - resource constraints")
                     continue
                 
-                self.logger.info(f"Starting HPO for {arch_name}")
+                # Track start time for this architecture
+                arch_start_time = time.time()
                 
-                # Get architecture-specific hyperparameter search space
-                search_space = self._get_hyperparameter_search_space(arch_name)
-                
-                # Get architecture characteristics for HPO selection
-                arch_characteristics = self.model_factory.get_model_characteristics(arch_name)
-                dataset_complexity = self.dataset_info['characteristics']['complexity_score']
-                available_time = self.budget_manager.get_phase_remaining_time_hours()
-                
-                # Create objective function for this architecture
-                objective_function = self.trainer.create_objective_function(
-                    arch_name, train_loader, val_loader, self.model_factory,
-                    early_stopping_engine=self.early_stopping,
-                    budget_manager=self.budget_manager
-                )
-                
-                # Run HPO for this architecture
-                hpo_result = self.hpo_selector.optimize_hyperparameters(
-                    arch_name,
-                    objective_function,
-                    search_space,
-                    arch_characteristics,
-                    dataset_complexity,
-                    available_time
-                )
-                
-                # Store results
-                architecture_results[arch_name] = hpo_result
-                self.budget_manager.completed_architectures.add(arch_name)
-
-                self.logger.info(f"HPO completed for {arch_name}:")
-                self.logger.info(f"  Best score: {hpo_result.best_score:.4f}")
-                self.logger.info(f"  Best params: {hpo_result.best_params}")
-                self.logger.info(f"  Method used: {hpo_result.method_used.value}")
-                self.logger.info(f"  Trials completed: {hpo_result.n_trials_completed}")
-                
-                # Check for early stopping
-                should_stop, reason, confidence = self.early_stopping.should_stop_architecture(arch_name)
-                if should_stop:
-                    self.early_stopping.stop_architecture(arch_name, reason, confidence)
-                    freed_time = self.budget_manager.architecture_stopped_early(
-                        arch_name, reason.value, hpo_result.best_score
+                try:
+                    self.logger.info(f"Starting HPO for {arch_name} with STRICT {self.budget_manager.hours_per_model}h limit")
+                    
+                    # Get architecture-specific hyperparameter search space
+                    search_space = self._get_hyperparameter_search_space(arch_name)
+                    
+                    # Get architecture characteristics for HPO selection
+                    arch_characteristics = self.model_factory.get_model_characteristics(arch_name)
+                    dataset_complexity = self.dataset_info['characteristics']['complexity_score']
+                    
+                    # UPDATED: Use strict time limit per model instead of remaining phase time
+                    available_time = self.budget_manager.hours_per_model
+                    
+                    # Create objective function for this architecture
+                    objective_function = self.trainer.create_objective_function(
+                        arch_name, train_loader, val_loader, self.model_factory,
+                        early_stopping_engine=self.early_stopping,
+                        budget_manager=self.budget_manager
                     )
                     
-                    self.decision_log.append({
-                        'type': 'early_stopping',
-                        'architecture': arch_name,
-                        'reason': reason.value,
-                        'confidence': confidence,
-                        'freed_time_hours': freed_time
-                    })
+                    # Run HPO for this architecture
+                    hpo_result = self.hpo_selector.optimize_hyperparameters(
+                        arch_name,
+                        objective_function,
+                        search_space,
+                        arch_characteristics,
+                        dataset_complexity,
+                        available_time
+                    )
                     
-                    self.logger.info(f"Stopped {arch_name} early: {reason.value}")
+                    # Calculate elapsed time
+                    arch_elapsed_time = time.time() - arch_start_time
+                    
+                    # Store results
+                    architecture_results[arch_name] = hpo_result
+                    self.budget_manager.completed_architectures.add(arch_name)
+                    
+                    # BUGFIX: Mark architecture as inactive in resource allocation
+                    if arch_name in self.budget_manager.resource_allocations:
+                        self.budget_manager.resource_allocations[arch_name].is_active = False
+                        self.budget_manager.resource_allocations[arch_name].end_time = time.time()
+
+                    self.logger.info(f"HPO completed for {arch_name}:")
+                    self.logger.info(f"  Best score: {hpo_result.best_score:.4f}")
+                    self.logger.info(f"  Best params: {hpo_result.best_params}")
+                    self.logger.info(f"  Method used: {hpo_result.method_used.value}")
+                    self.logger.info(f"  Trials completed: {hpo_result.n_trials_completed}")
+                    self.logger.info(f"  Time used: {arch_elapsed_time/3600:.2f}h / {self.budget_manager.hours_per_model}h")
+                    
+                    # Check for early stopping
+                    should_stop, reason, confidence = self.early_stopping.should_stop_architecture(arch_name)
+                    if should_stop:
+                        self.early_stopping.stop_architecture(arch_name, reason, confidence)
+                        freed_time = self.budget_manager.architecture_stopped_early(
+                            arch_name, reason.value, hpo_result.best_score
+                        )
+                        
+                        self.decision_log.append({
+                            'type': 'early_stopping',
+                            'architecture': arch_name,
+                            'reason': reason.value,
+                            'confidence': confidence,
+                            'freed_time_hours': freed_time
+                        })
+                        
+                        self.logger.info(f"Stopped {arch_name} early: {reason.value}")
+                    
+                except Exception as e:
+                    self.logger.error(f"Architecture {arch_name} failed: {e}")
+                    # Create dummy result for failed architecture
+                    from .hpo_selection import HPOResult, HPOMethod
+                    architecture_results[arch_name] = HPOResult(
+                        architecture=arch_name,
+                        method_used=HPOMethod.ASHA,
+                        best_params={},
+                        best_score=0.0,
+                        n_trials_completed=0,
+                        optimization_time=0.0,
+                        convergence_history=[],
+                        method_efficiency=0.0,
+                        early_stopped=True
+                    )
+                
+                finally:
+                    # Clean up any resources if needed
+                    pass
                 
                 # Print current budget status
                 self.budget_manager.print_budget_status()
@@ -412,7 +487,7 @@ class AutoMLPipeline:
             comprehensive_results = {
                 'pipeline_config': {
                     'dataset_name': self.config.get('dataset_name'),
-                    'time_budget_hours': self.config.get('time_budget_hours'),
+                    'hours_per_model': self.config.get('hours_per_model'),
                     'architectures_evaluated': list(self.architecture_results.keys()),
                     'total_execution_time_hours': sum(log['duration_seconds'] for log in self.execution_log) / 3600.0
                 },
@@ -704,7 +779,7 @@ if __name__ == "__main__":
     # Simple test setup
     config = AutoMLConfig()
     config.set('dataset_name', 'emotions')
-    config.set('time_budget_hours', 2)  # Short test
+    config.set('hours_per_model', 2.0)  # UNIFIED: 2 hours per model
     
     # Setup logging
     setup_logging(level='INFO')

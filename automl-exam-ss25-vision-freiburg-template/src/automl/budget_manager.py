@@ -37,6 +37,15 @@ except ImportError:
     class MetricTracker:
         def __init__(self):
             self.metrics = {}
+    
+    def get_time_config():
+        from dataclasses import dataclass
+        @dataclass
+        class TimeConfig:
+            MAX_HOURS_PER_MODEL: float = 2.0
+            MAX_HOURS_FINAL_TRAINING: float = 2.0
+            BUFFER_HOURS: float = 2.0
+        return TimeConfig()
 
 class ExecutionPhase(Enum):
     """Different phases of AutoML execution"""
@@ -65,43 +74,43 @@ class ResourceAllocation:
 
 @dataclass
 class BudgetSnapshot:
-    """Snapshot of budget state at a point in time"""
+    """Snapshot of budget state at a point in time - UNIFIED VERSION"""
     timestamp: float
-    total_time_elapsed: float
-    total_time_remaining: float
+    elapsed_hours: float  # Only track elapsed time, no remaining/total
     active_architectures: int
     completed_architectures: int
     stopped_architectures: int
     phase: ExecutionPhase
     resource_allocations: Dict[str, ResourceAllocation]
-    reallocation_events: List[Dict[str, Any]] = field(default_factory=list)
 
 class BudgetManager:
     """
-    Intelligent budget manager for AutoML pipeline
+    UNIFIED Time Management for AutoML Pipeline
     
-    Core Innovation: Dynamic resource reallocation based on architecture performance
-    and early stopping decisions
+    SINGLE SOURCE OF TRUTH for all time-related functionality:
+    - Per-model time limits (user configurable)
+    - Smart completion (finish last epoch/trial)
+    - No final training time limits
+    - Strict enforcement with grace periods
     """
     
     def __init__(self, config: AutoMLConfig):
         self.config = config
         self.logger = logging.getLogger('AutoML.BudgetManager')
         
-        # Time budget configuration - UPDATED: Better resource allocation
-        self.total_time_hours = config.get('time_budget_hours', 24)
-        self.architecture_search_ratio = config.get('architecture_search_ratio', 0.60)  # Reduced from 70%
-        self.final_training_ratio = config.get('final_training_ratio', 0.30)           # Increased from 20%
-        self.buffer_ratio = config.get('buffer_ratio', 0.10)                           # Keep 10%
+        # UNIFIED TIME CONFIGURATION - User sets per-model time only
+        self.hours_per_model = config.get('hours_per_model', 2.0)  # ONLY user-configurable time constraint
         
-        # Calculate phase budgets
-        self.architecture_search_hours = self.total_time_hours * self.architecture_search_ratio
-        self.final_training_hours = self.total_time_hours * self.final_training_ratio
-        self.buffer_hours = self.total_time_hours * self.buffer_ratio
+        # NO PIPELINE TIME LIMITS - only per-model limits
+        # NO FINAL TRAINING TIME LIMITS - final training runs without time constraints
         
-        # Resource constraints
+        # Smart completion settings
+        self.smart_completion_enabled = config.get('smart_completion', True)
+        self.grace_period_minutes = config.get('grace_period_minutes', 10)  # Allow 10min to finish last epoch/trial
+        
+        # Resource constraints (non-time related)
         self.max_gpu_memory_gb = config.get('max_gpu_memory_gb', 16)
-        self.max_parallel_architectures = config.get('max_parallel_architectures', 4)
+        self.max_parallel_architectures = config.get('max_parallel_architectures', 1)  # Sequential by default
         
         # State tracking
         self.start_time: Optional[float] = None
@@ -111,6 +120,10 @@ class BudgetManager:
         self.completed_architectures: Set[str] = set()
         self.stopped_architectures: Set[str] = set()
         
+        # Per-model time tracking
+        self.model_start_times: Dict[str, float] = {}
+        self.model_timeouts: Dict[str, bool] = {}
+        
         # Budget tracking
         self.budget_snapshots: List[BudgetSnapshot] = []
         self.reallocation_history: List[Dict[str, Any]] = []
@@ -118,11 +131,55 @@ class BudgetManager:
         # Thread safety
         self._lock = threading.Lock()
         
-        self.logger.info(f"BudgetManager initialized:")
-        self.logger.info(f"  Total budget: {self.total_time_hours:.1f} hours")
-        self.logger.info(f"  Architecture search: {self.architecture_search_hours:.1f} hours ({self.architecture_search_ratio*100:.0f}%)")
-        self.logger.info(f"  Final training: {self.final_training_hours:.1f} hours ({self.final_training_ratio*100:.0f}%)")
-        self.logger.info(f"  Buffer: {self.buffer_hours:.1f} hours ({self.buffer_ratio*100:.0f}%)")
+        self.logger.info(f"UNIFIED BudgetManager initialized:")
+        self.logger.info(f"  Per-model time limit: {self.hours_per_model:.1f} hours (STRICT)")
+        self.logger.info(f"  Smart completion: {self.smart_completion_enabled}")
+        self.logger.info(f"  Grace period: {self.grace_period_minutes} minutes")
+        self.logger.info(f"  Final training: NO TIME LIMITS")
+        self.logger.info(f"  Pipeline: NO TOTAL TIME LIMITS")
+    
+    @staticmethod
+    def get_model_count_for_complexity(complexity_score: float) -> int:
+        """
+        Determine number of models based on dataset complexity
+        
+        Args:
+            complexity_score: Dataset complexity score (0-10)
+            
+        Returns:
+            Number of models to evaluate
+        """
+        LOW_COMPLEXITY_MODELS = 3  # For complexity <= 3.0
+        HIGH_COMPLEXITY_MODELS = 4  # For complexity > 3.0
+        
+        if complexity_score <= 3.0:
+            return LOW_COMPLEXITY_MODELS
+        else:
+            return HIGH_COMPLEXITY_MODELS
+    
+    def calculate_total_budget(self, num_models: int) -> dict:
+        """
+        Calculate total budget breakdown
+        
+        Args:
+            num_models: Number of models to evaluate
+            
+        Returns:
+            Dictionary with budget breakdown
+        """
+        max_hours_per_model = self.hours_per_model
+        architecture_search_hours = num_models * max_hours_per_model
+        final_training_hours = max_hours_per_model  # 1 model for final training
+        buffer_hours = 0.5  # Small buffer
+        total_hours = architecture_search_hours + final_training_hours + buffer_hours
+        
+        return {
+            'max_hours_per_model': max_hours_per_model,
+            'architecture_search_hours': architecture_search_hours,
+            'final_training_hours': final_training_hours,
+            'buffer_hours': buffer_hours,
+            'total_hours': total_hours
+        }
     
     def start_execution(self, architectures: List[str]):
         """Start the AutoML execution with given architectures"""
@@ -147,20 +204,18 @@ class BudgetManager:
             self.logger.info(f"Architecture queue: {architectures}")
     
     def _perform_initial_allocation(self, architectures: List[str]):
-        """Perform initial equal allocation of resources"""
+        """Perform initial allocation - UNIFIED TIME MANAGEMENT"""
         
         # Handle edge case: no architectures
         if not architectures:
             self.logger.warning("No architectures to allocate resources to")
             return
         
-        # Equal time allocation during search phase
-        time_per_architecture = self.architecture_search_hours / len(architectures)
+        # UNIFIED: Each architecture gets exactly hours_per_model time
+        time_per_architecture = self.hours_per_model
         
-        # Equal memory allocation (with safety margin)
-        # Fix: Don't exceed parallel limit when calculating memory per architecture
-        effective_parallel_limit = min(len(architectures), self.max_parallel_architectures)
-        memory_per_architecture = (self.max_gpu_memory_gb * 0.8) / effective_parallel_limit
+        # Memory allocation (sequential processing, so full memory available)
+        memory_per_architecture = self.max_gpu_memory_gb * 0.8  # 80% safety margin
         
         for arch in architectures:
             allocation = ResourceAllocation(
@@ -173,7 +228,8 @@ class BudgetManager:
             )
             self.resource_allocations[arch] = allocation
         
-        self.logger.info(f"Initial allocation: {time_per_architecture:.2f}h and {memory_per_architecture:.1f}GB per architecture")
+        self.logger.info(f"UNIFIED allocation: {time_per_architecture:.2f}h per architecture (STRICT)")
+        self.logger.info(f"Memory allocation: {memory_per_architecture:.1f}GB per architecture")
     
     def get_architecture_allocation(self, architecture: str) -> Optional[ResourceAllocation]:
         """Get current resource allocation for an architecture"""
@@ -322,16 +378,12 @@ class BudgetManager:
         self.reallocation_history.append(reallocation_event)
     
     def should_start_final_training(self) -> bool:
-        """Check if we should transition to final training phase - FIXED VERSION"""
+        """Check if we should transition to final training phase - UNIFIED VERSION"""
         with self._lock:
             if self.current_phase != ExecutionPhase.ARCHITECTURE_SEARCH:
                 return False
             
-            # Check time condition
-            elapsed_hours = self.get_elapsed_time_hours()
-            search_phase_complete = elapsed_hours >= self.architecture_search_hours
-            
-            # FIXED: Check if all architectures are done properly
+            # UNIFIED: NO TIME-BASED TRANSITION - only when all architectures are done
             # Count architectures that have actually been processed (have results or were stopped)
             processed_count = len(self.completed_architectures) + len(self.stopped_architectures)
             total_architectures = len(self.resource_allocations)
@@ -339,18 +391,16 @@ class BudgetManager:
             # Only consider "all done" if we've actually processed all architectures
             all_architectures_done = (processed_count >= total_architectures) and (total_architectures > 0)
             
-            should_transition = search_phase_complete or all_architectures_done
-            
-            if should_transition:
+            if all_architectures_done:
                 self.logger.info(f"Transitioning to final training phase:")
-                self.logger.info(f"  Time condition: {elapsed_hours:.2f}h >= {self.architecture_search_hours:.2f}h ({search_phase_complete})")
-                self.logger.info(f"  All done condition: {processed_count}/{total_architectures} processed ({all_architectures_done})")
+                self.logger.info(f"  All architectures processed: {processed_count}/{total_architectures}")
+                self.logger.info(f"  NO TIME LIMITS for final training")
             
-            return should_transition
+            return all_architectures_done
     
     def start_final_training_phase(self) -> List[str]:
         """
-        Start final training phase and return architectures to train
+        Start final training phase and return architectures to train - UNIFIED VERSION
         
         Returns:
             List of architectures selected for final training
@@ -361,13 +411,10 @@ class BudgetManager:
             # Select top architectures for final training
             final_candidates = self._select_final_training_candidates()
             
-            # Allocate remaining time to final training
-            remaining_time = self._calculate_remaining_time()
-            self._allocate_final_training_time(final_candidates, remaining_time)
-            
+            # UNIFIED: NO TIME ALLOCATION for final training - runs without limits
             self.logger.info(f"Starting final training phase:")
             self.logger.info(f"  Selected architectures: {final_candidates}")
-            self.logger.info(f"  Remaining time: {remaining_time:.2f}h")
+            self.logger.info(f"  NO TIME LIMITS for final training")
             
             return final_candidates
     
@@ -406,49 +453,19 @@ class BudgetManager:
         
         return selected
     
+    # UNIFIED: These methods are no longer needed since final training has no time limits
     def _calculate_remaining_time(self) -> float:
-        """Calculate remaining time for final training"""
-        elapsed_hours = self.get_elapsed_time_hours()
-        remaining_total = max(0, self.total_time_hours - elapsed_hours)
-        
-        # Reserve buffer time
-        usable_remaining = max(0, remaining_total - self.buffer_hours)
-        
-        return usable_remaining
+        """DEPRECATED: Final training has no time limits in unified system"""
+        return float('inf')  # Unlimited time for final training
     
     def _allocate_final_training_time(self, candidates: List[str], total_time: float):
-        """Allocate time for final training among selected candidates"""
-        if not candidates:
-            self.logger.warning("No candidates for final training time allocation")
-            return
-        
-        # Strategy: Give more time to better performing architectures
-        candidate_performances = []
+        """DEPRECATED: Final training has no time limits in unified system"""
+        # Just mark candidates as final training phase - no time allocation needed
         for arch in candidates:
             if arch in self.resource_allocations:
-                performance = self.resource_allocations[arch].performance_score
-                candidate_performances.append((arch, performance))
-        
-        total_performance = sum(perf for _, perf in candidate_performances)
-        
-        if total_performance <= 0:
-            # Equal distribution fallback
-            time_per_candidate = total_time / len(candidates)
-            for arch in candidates:
-                if arch in self.resource_allocations:
-                    self.resource_allocations[arch].allocated_time_hours = time_per_candidate
-                    self.resource_allocations[arch].phase = ExecutionPhase.FINAL_TRAINING
-        else:
-            # Performance-weighted distribution
-            for arch, performance in candidate_performances:
-                if arch in self.resource_allocations:
-                    weight = performance / total_performance
-                    allocated_time = total_time * weight
-                    self.resource_allocations[arch].allocated_time_hours = allocated_time
-                    self.resource_allocations[arch].phase = ExecutionPhase.FINAL_TRAINING
-                    self.resource_allocations[arch].is_active = True  # Reactivate for final training
-                    
-                    self.logger.info(f"Final training allocation for {arch}: {allocated_time:.2f}h (weight: {weight:.2f})")
+                self.resource_allocations[arch].phase = ExecutionPhase.FINAL_TRAINING
+                self.resource_allocations[arch].is_active = True  # Reactivate for final training
+                self.logger.info(f"Final training candidate: {arch} (NO TIME LIMITS)")
     
     def _has_available_resources(self, required_allocation: ResourceAllocation) -> bool:
         """Check if required resources are available"""
@@ -469,6 +486,14 @@ class BudgetManager:
             self.logger.debug(f"Parallel limit constraint: {active_count} >= {self.max_parallel_architectures}")
             return False
         
+        # ENHANCED LOGGING: Log resource check details
+        self.logger.debug(f"Resource check for {required_allocation.architecture}:")
+        self.logger.debug(f"  Current memory usage: {current_memory_usage:.1f}GB")
+        self.logger.debug(f"  Required memory: {required_allocation.allocated_memory_gb:.1f}GB")
+        self.logger.debug(f"  Max memory: {self.max_gpu_memory_gb:.1f}GB")
+        self.logger.debug(f"  Active architectures: {active_count}")
+        self.logger.debug(f"  Max parallel: {self.max_parallel_architectures}")
+        
         return True
     
     def get_elapsed_time_hours(self) -> float:
@@ -477,32 +502,9 @@ class BudgetManager:
             return 0.0
         return (time.time() - self.start_time) / 3600.0
     
-    def get_remaining_time_hours(self) -> float:
-        """Get remaining time in total budget"""
-        elapsed = self.get_elapsed_time_hours()
-        return max(0, self.total_time_hours - elapsed)
-    
-    def get_phase_remaining_time_hours(self) -> float:
-        """Get remaining time in current phase"""
-        elapsed = self.get_elapsed_time_hours()
-        
-        if self.current_phase == ExecutionPhase.ARCHITECTURE_SEARCH:
-            return max(0, self.architecture_search_hours - elapsed)
-        elif self.current_phase == ExecutionPhase.FINAL_TRAINING:
-            final_training_start = self.architecture_search_hours
-            final_training_elapsed = max(0, elapsed - final_training_start)
-            return max(0, self.final_training_hours - final_training_elapsed)
-        else:
-            return self.get_remaining_time_hours()
-    
-    def is_budget_exhausted(self) -> bool:
-        """Check if time budget is exhausted"""
-        return self.get_remaining_time_hours() <= 0.1  # 6 minutes tolerance
-    
     def _take_budget_snapshot(self):
-        """Take a snapshot of current budget state"""
+        """Take a snapshot of current budget state - UNIFIED VERSION"""
         elapsed_time = self.get_elapsed_time_hours()
-        remaining_time = self.get_remaining_time_hours()
         
         active_count = sum(1 for alloc in self.resource_allocations.values() if alloc.is_active)
         completed_count = len(self.completed_architectures)
@@ -510,8 +512,7 @@ class BudgetManager:
         
         snapshot = BudgetSnapshot(
             timestamp=time.time(),
-            total_time_elapsed=elapsed_time,
-            total_time_remaining=remaining_time,
+            elapsed_hours=elapsed_time,
             active_architectures=active_count,
             completed_architectures=completed_count,
             stopped_architectures=stopped_count,
@@ -522,11 +523,9 @@ class BudgetManager:
         self.budget_snapshots.append(snapshot)
     
     def get_budget_summary(self) -> Dict[str, Any]:
-        """Get comprehensive budget summary"""
+        """Get comprehensive budget summary - UNIFIED VERSION"""
         with self._lock:
             elapsed = self.get_elapsed_time_hours()
-            remaining = self.get_remaining_time_hours()
-            phase_remaining = self.get_phase_remaining_time_hours()
             
             # Architecture statistics
             active_architectures = [arch for arch, alloc in self.resource_allocations.items() if alloc.is_active]
@@ -546,10 +545,8 @@ class BudgetManager:
                 'execution_status': {
                     'phase': self.current_phase.value,
                     'elapsed_hours': elapsed,
-                    'remaining_hours': remaining,
-                    'phase_remaining_hours': phase_remaining,
-                    'budget_utilization': elapsed / self.total_time_hours if self.total_time_hours > 0 else 0,
-                    'is_budget_exhausted': self.is_budget_exhausted()
+                    'budget_utilization': 0.0,  # UNIFIED: No total budget concept
+                    'is_budget_exhausted': False  # UNIFIED: Never exhausted
                 },
                 'architecture_statistics': {
                     'total_architectures': len(self.resource_allocations),
@@ -573,24 +570,22 @@ class BudgetManager:
                     'total_reallocations': len(self.reallocation_history)
                 },
                 'phase_breakdown': {
-                    'architecture_search_hours': self.architecture_search_hours,
-                    'final_training_hours': self.final_training_hours,
-                    'buffer_hours': self.buffer_hours,
-                    'total_budget_hours': self.total_time_hours
+                    'per_model_hours': self.hours_per_model,  # UNIFIED: Only per-model time matters
+                    'smart_completion': self.smart_completion_enabled,
+                    'grace_period_minutes': self.grace_period_minutes,
+                    'final_training_unlimited': True
                 }
             }
             
             return summary
     
     def print_budget_status(self):
-        """Print human-readable budget status"""
+        """Print human-readable budget status - UNIFIED VERSION"""
         summary = self.get_budget_summary()
         
         print(f"\n=== AutoML Budget Status ===")
         print(f"Phase: {summary['execution_status']['phase'].upper()}")
-        print(f"Time: {summary['execution_status']['elapsed_hours']:.1f}h elapsed, "
-              f"{summary['execution_status']['remaining_hours']:.1f}h remaining "
-              f"({summary['execution_status']['budget_utilization']*100:.1f}% used)")
+        print(f"Time: {summary['execution_status']['elapsed_hours']:.1f}h elapsed (NO TIME LIMITS)")
         
         print(f"\nArchitectures:")
         print(f"  Active: {summary['architecture_statistics']['active']} {summary['architecture_statistics']['active_list']}")
@@ -608,13 +603,14 @@ class BudgetManager:
                 print(f"    {arch}: {score:.3f}")
     
     def save_state(self, filepath: str):
-        """Save budget manager state"""
+        """Save budget manager state - UNIFIED VERSION"""
         state = {
             'config': {
-                'total_time_hours': self.total_time_hours,
-                'architecture_search_ratio': self.architecture_search_ratio,
-                'final_training_ratio': self.final_training_ratio,
-                'buffer_ratio': self.buffer_ratio
+                'hours_per_model': self.hours_per_model,
+                'smart_completion_enabled': self.smart_completion_enabled,
+                'grace_period_minutes': self.grace_period_minutes,
+                'max_gpu_memory_gb': self.max_gpu_memory_gb,
+                'max_parallel_architectures': self.max_parallel_architectures
             },
             'execution_state': {
                 'start_time': self.start_time,
@@ -641,7 +637,7 @@ class BudgetManager:
         with open(filepath, 'w') as f:
             json.dump(state, f, indent=2, default=str)
         
-        self.logger.info(f"Budget manager state saved to {filepath}")
+        self.logger.info(f"UNIFIED Budget manager state saved to {filepath}")
 
 # Test the budget manager
 if __name__ == "__main__":

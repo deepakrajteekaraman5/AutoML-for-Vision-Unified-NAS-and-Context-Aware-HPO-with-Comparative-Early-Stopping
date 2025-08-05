@@ -80,12 +80,19 @@ Examples:
         help='Root directory containing dataset (default: data)'
     )
     
-    # Time budget
+    # Per-model time budget (UNIFIED SYSTEM)
     parser.add_argument(
         '--time_budget',
         type=float,
-        default=24.0,
-        help='Time budget in hours (default: 24.0)'
+        default=2.0,
+        help='Time budget per model in hours (default: 2.0) - UNIFIED: No total pipeline limits'
+    )
+    
+    # Alternative parameter name for clarity
+    parser.add_argument(
+        '--hours_per_model',
+        type=float,
+        help='Time budget per model in hours (alternative to --time_budget)'
     )
     
     # Architecture selection
@@ -278,7 +285,7 @@ def apply_quick_test_configuration(config: AutoMLConfig, args):
         if args.ultra_quick:
             print(" Enabling ultra-quick mode...")
             # FIXED: Use individual set() calls instead of update()
-            config.set('time_budget_hours', 0.5)      # 30 minutes
+            config.set('hours_per_model', 0.5)        # UNIFIED: 30 minutes per model
             config.set('hpo_base_trials', 5)          # 5 trials per arch
             config.set('max_epochs_per_architecture', 8)  # 8 epochs max
             config.set('min_epochs_per_architecture', 3)  # 3 epochs min
@@ -334,12 +341,12 @@ def print_execution_plan(config: AutoMLConfig, architectures: list):
     print("="*62)
     
     mode = "QUICK TEST" if config.get('quick_test') else "FULL PIPELINE"
-    if config.get('quick_test') and config.get('time_budget_hours') <= 0.5:
+    if config.get('quick_test') and config.get('hours_per_model') <= 0.5:
         mode = "ULTRA-QUICK TEST"
     
     print(f" Mode: {mode}")
     print(f" Dataset: {config.get('dataset_name')} ({config.get('num_classes')} classes)")
-    print(f" Time Budget: {config.get('time_budget_hours')} hours")
+    print(f" UNIFIED TIME: {config.get('hours_per_model')} hours per model (NO total limits)")
     print(f" Architectures: {len(architectures)} ({', '.join(architectures)})")
     print(f" HPO Trials per Architecture: {config.get('hpo_base_trials')}")
     print(f" Max Epochs per Trial: {config.get('max_epochs_per_architecture')}")
@@ -414,12 +421,16 @@ def main():
         dataset_config = setup_dataset_config(args.dataset)
         config.update(**dataset_config)
         
-        # Apply command line arguments
-        config.set('time_budget_hours', args.time_budget)
+        # Apply command line arguments - UNIFIED TIME MANAGEMENT
+        # Map time_budget to hours_per_model (unified system)
+        hours_per_model = args.hours_per_model if args.hours_per_model else args.time_budget
+        config.set('hours_per_model', hours_per_model)
         config.set('results_dir', args.results_dir)
         config.set('checkpoint_dir', args.checkpoint_dir)
         config.set('random_seed', args.seed)
         config.set('device', args.device)
+        
+        print(f"🕒 UNIFIED TIME MANAGEMENT: {hours_per_model} hours per model (NO total pipeline limits)")
         
         # Apply quick test configurations
         apply_quick_test_configuration(config, args)

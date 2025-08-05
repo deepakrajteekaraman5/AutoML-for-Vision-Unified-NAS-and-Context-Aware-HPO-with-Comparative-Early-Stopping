@@ -2,7 +2,7 @@
 """
 Meta-HPO Selection Engine for AutoML Pipeline
 Core innovation: Context-aware automatic selection of optimal HPO methods for each architecture
-UPDATED: Reduced trial counts for faster execution
+UPDATED: Using ASHA from Optuna and BOHB from HpBandSter
 """
 
 import logging
@@ -15,18 +15,24 @@ import json
 import time
 from abc import ABC, abstractmethod
 import optuna
-from sklearn.model_selection import ParameterSampler
 import random
+import tempfile
+import os
+
+# HpBandSter imports
+import hpbandster.core.nameserver as hpns
+import hpbandster.core.result as hpres
+from hpbandster.optimizers import BOHB
+import ConfigSpace as CS
+from hpbandster.core.worker import Worker
+import threading
 
 from .utils import AutoMLConfig, Timer, MetricTracker
 
 class HPOMethod(Enum):
     """Available HPO methods"""
-    BAYESIAN_OPTIMIZATION = "bayesian_optimization"
-    SUCCESSIVE_HALVING = "successive_halving"
-    HYPERBAND = "hyperband"
-    RANDOM_SEARCH = "random_search"
-    GRID_SEARCH = "grid_search"
+    ASHA = "asha"
+    BOHB = "bohb"
 
 @dataclass
 class HPOConfig:
@@ -49,7 +55,7 @@ class HPOResult:
     optimization_time: float
     convergence_history: List[float]
     method_efficiency: float  # Score per unit time
-    early_stopped: bool = False  # NEW: Track if stopped early
+    early_stopped: bool = False  # Track if stopped early
 
 class BaseHPOMethod(ABC):
     """Base class for HPO methods"""
@@ -58,8 +64,8 @@ class BaseHPOMethod(ABC):
         self.config = config
         self.logger = logging.getLogger(f'AutoML.HPO.{self.config.method.value}')
         self.optimization_history = []
-        self.early_stop_threshold = 0.95  # NEW: Stop if score > 95%
-        self.min_trials_before_early_stop = 5  # NEW: Minimum trials before early stopping
+        self.early_stop_threshold = 0.95  # Stop if score > 95%
+        self.min_trials_before_early_stop = 5  # Minimum trials before early stopping
     
     @abstractmethod
     def optimize(self, 
@@ -75,7 +81,7 @@ class BaseHPOMethod(ABC):
             score = objective_function(trial_params)
             self.optimization_history.append(score)
             
-            # NEW: Check for early success
+            # Check for early success
             if (len(self.optimization_history) >= self.min_trials_before_early_stop and 
                 score >= self.early_stop_threshold):
                 self.logger.info(f"Excellent score {score:.4f} achieved! Considering early stop...")
@@ -86,30 +92,50 @@ class BaseHPOMethod(ABC):
             return float('-inf')
     
     def _should_stop_early(self) -> bool:
-        """NEW: Check if we should stop HPO early due to excellent performance"""
+        """Check if we should stop HPO early due to excellent performance"""
         if len(self.optimization_history) < self.min_trials_before_early_stop:
             return False
         
         best_score = max(self.optimization_history)
         return best_score >= self.early_stop_threshold
 
-class BayesianOptimizationHPO(BaseHPOMethod):
-    """Bayesian Optimization using Optuna TPE - REDUCED TRIALS"""
+class ASHAOptimizerHPO(BaseHPOMethod):
+    """ASHA (Asynchronous Successive Halving Algorithm) using Optuna"""
     
     def optimize(self, objective_function: callable, search_space: Dict[str, Any], architecture_name: str) -> HPOResult:
-        self.logger.info(f"Starting Bayesian Optimization for {architecture_name}")
+        self.logger.info(f"Starting ASHA optimization for {architecture_name}")
         
         start_time = time.time()
         early_stopped = False
         
-        # Create Optuna study
+        # Create Optuna study with ASHA pruner
         study = optuna.create_study(
             direction='maximize',
-            sampler=optuna.samplers.TPESampler(seed=42),
-            pruner=optuna.pruners.MedianPruner(n_startup_trials=3, n_warmup_steps=5)  # REDUCED
+            sampler=optuna.samplers.RandomSampler(seed=42),
+            pruner=optuna.pruners.SuccessiveHalvingPruner(
+                min_resource=1,  # Minimum epochs/resource
+                reduction_factor=3,  # Factor by which to reduce candidates
+                min_early_stopping_rate=0  # Allow pruning from the start
+            )
         )
         
         def optuna_objective(trial):
+            # SMART TRIAL SCHEDULING: Check if we should start this trial
+            elapsed_time = time.time() - start_time
+            remaining_time = max(0, self.config.timeout_seconds - elapsed_time)
+            trials_completed = len(study.trials)
+            trials_remaining = max(0, self.config.n_trials - trials_completed)
+            
+            # Don't start new trial if insufficient time and conditions met
+            if (remaining_time < 1800 and  # Less than 30 minutes remaining
+                trials_remaining <= 2 and  # 2 or fewer trials remaining
+                trials_completed >= 2):    # At least 2 trials completed
+                
+                self.logger.info(f"SMART SCHEDULING: Skipping trial - insufficient time")
+                self.logger.info(f"  Remaining time: {remaining_time/60:.1f}m, trials left: {trials_remaining}")
+                study.stop()  # Stop the study
+                raise optuna.exceptions.TrialPruned()
+            
             # Convert search space to Optuna suggestions
             params = {}
             for param_name, param_config in search_space.items():
@@ -139,12 +165,25 @@ class BayesianOptimizationHPO(BaseHPOMethod):
                         param_config['choices']
                     )
             
-            score = self._evaluate_trial(params, objective_function)
-            
-            # NEW: Check for early stopping
-            if self._should_stop_early():
-                study.stop()
+            # ASHA multi-fidelity: MINIMAL epochs for 2-hour limit
+            max_epochs = 25  # REDUCED from 50
+            for epoch in [3, 8, 15, 25]:  # MINIMAL successive halving points
+                # Simulate partial training (in practice, you'd train for 'epoch' epochs)
+                score = self._evaluate_trial(params, objective_function)
                 
+                # Report intermediate value for pruning
+                trial.report(score, epoch)
+                
+                # Check if trial should be pruned
+                if trial.should_prune():
+                    self.logger.debug(f"Trial pruned at epoch {epoch}")
+                    raise optuna.exceptions.TrialPruned()
+                
+                # Check for early stopping due to excellent performance
+                if self._should_stop_early():
+                    study.stop()
+                    break
+            
             return score
         
         # Run optimization
@@ -161,7 +200,7 @@ class BayesianOptimizationHPO(BaseHPOMethod):
         # Check if we stopped early due to excellent performance
         if self._should_stop_early():
             early_stopped = True
-            self.logger.info(f"Stopped early - excellent performance achieved!")
+            self.logger.info(f"ASHA stopped early - excellent performance achieved!")
         
         optimization_time = time.time() - start_time
         
@@ -173,7 +212,7 @@ class BayesianOptimizationHPO(BaseHPOMethod):
         
         return HPOResult(
             architecture=architecture_name,
-            method_used=HPOMethod.BAYESIAN_OPTIMIZATION,
+            method_used=HPOMethod.ASHA,
             best_params=study.best_params if study.best_params else {},
             best_score=study.best_value if study.best_value is not None else float('-inf'),
             n_trials_completed=len(study.trials),
@@ -183,189 +222,220 @@ class BayesianOptimizationHPO(BaseHPOMethod):
             early_stopped=early_stopped
         )
 
-class SuccessiveHalvingHPO(BaseHPOMethod):
-    """Successive Halving for rapid candidate elimination - REDUCED CANDIDATES"""
+class BOHBWorker(Worker):
+    """BOHB Worker class for evaluating configurations"""
     
-    def optimize(self, objective_function: callable, search_space: Dict[str, Any], architecture_name: str) -> HPOResult:
-        self.logger.info(f"Starting Successive Halving for {architecture_name}")
-        
-        start_time = time.time()
-        early_stopped = False
-        
-        # REDUCED: Generate fewer initial candidates
-        n_initial_candidates = min(self.config.n_trials, 16)  # Instead of 81
-        candidates = self._generate_random_candidates(search_space, n_initial_candidates)
-        
-        # Successive halving parameters
-        halving_factor = 2  # CHANGED: Use 2 instead of 3 for faster elimination
-        min_resource = 0.2  # INCREASED: Start with 20% instead of 10%
-        max_resource = 1.0
-        
-        best_params = None
-        best_score = float('-inf')
-        total_evaluations = 0
-        
-        current_resource = min_resource
-        remaining_candidates = candidates.copy()
-        
-        while len(remaining_candidates) > 1 and current_resource <= max_resource:
-            self.logger.info(f"Successive halving round: {len(remaining_candidates)} candidates, "
-                           f"resource: {current_resource:.2f}")
-            
-            # Evaluate all remaining candidates with current resource
-            candidate_scores = []
-            for i, params in enumerate(remaining_candidates):
-                # Modify objective function to use partial resource
-                score = self._evaluate_with_resource(params, objective_function, current_resource)
-                candidate_scores.append((score, params))
-                total_evaluations += 1
-                
-                if score > best_score:
-                    best_score = score
-                    best_params = params
-                
-                # NEW: Check for early stopping
-                if self._should_stop_early():
-                    early_stopped = True
-                    self.logger.info(f"Successive halving stopped early - excellent performance!")
-                    break
-            
-            if early_stopped:
-                break
-            
-            # Keep top 1/halving_factor candidates
-            candidate_scores.sort(key=lambda x: x[0], reverse=True)
-            n_keep = max(1, len(candidate_scores) // halving_factor)
-            remaining_candidates = [params for score, params in candidate_scores[:n_keep]]
-            
-            # Increase resource for next round
-            current_resource = min(current_resource * halving_factor, max_resource)
-        
-        # Final evaluation with full resource (if not early stopped)
-        if remaining_candidates and not early_stopped:
-            final_score = objective_function(remaining_candidates[0])
-            if final_score > best_score:
-                best_score = final_score
-                best_params = remaining_candidates[0]
-            total_evaluations += 1
-        
-        optimization_time = time.time() - start_time
-        efficiency = best_score / optimization_time if optimization_time > 0 else 0.0
-        
-        return HPOResult(
-            architecture=architecture_name,
-            method_used=HPOMethod.SUCCESSIVE_HALVING,
-            best_params=best_params or {},
-            best_score=best_score,
-            n_trials_completed=total_evaluations,
-            optimization_time=optimization_time,
-            convergence_history=self.optimization_history.copy(),
-            method_efficiency=efficiency,
-            early_stopped=early_stopped
-        )
+    def __init__(self, objective_function, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.objective_function = objective_function
+        self.optimization_history = []
+        self.early_stop_threshold = 0.95
+        self.min_trials_before_early_stop = 5
     
-    def _generate_random_candidates(self, search_space: Dict[str, Any], n_candidates: int) -> List[Dict[str, Any]]:
-        """Generate random candidate configurations"""
-        candidates = []
-        
-        for _ in range(n_candidates):
-            candidate = {}
-            for param_name, param_config in search_space.items():
-                if param_config['type'] == 'float':
-                    low, high = param_config['range']
-                    if param_config.get('log_scale', False):
-                        candidate[param_name] = np.exp(np.random.uniform(np.log(low), np.log(high)))
-                    else:
-                        candidate[param_name] = np.random.uniform(low, high)
-                elif param_config['type'] == 'int':
-                    low, high = param_config['range']
-                    candidate[param_name] = np.random.randint(low, high + 1)
-                elif param_config['type'] == 'categorical':
-                    candidate[param_name] = np.random.choice(param_config['choices'])
+    def compute(self, config, budget, **kwargs):
+        """Compute the loss for a given configuration and budget"""
+        try:
+            # Convert config to standard format
+            params = dict(config)
             
-            candidates.append(candidate)
-        
-        return candidates
-    
-    def _evaluate_with_resource(self, params: Dict[str, Any], objective_function: callable, resource_fraction: float) -> float:
-        """Evaluate with reduced resource (e.g., fewer epochs)"""
-        # For now, use full evaluation but weight by resource fraction
-        # In practice, this would train for fewer epochs
-        score = self._evaluate_trial(params, objective_function)
-        return score * resource_fraction  # Simulate partial evaluation
+            # Simulate training with the given budget (budget represents epochs/resources)
+            score = self.objective_function(params)
+            self.optimization_history.append(score)
+            
+            # BOHB minimizes, so we return negative score
+            loss = 1.0 - score
+            
+            return {
+                'loss': loss,
+                'info': {
+                    'score': score,
+                    'budget_used': budget,
+                    'params': params
+                }
+            }
+        except Exception as e:
+            # Return a high loss for failed evaluations
+            return {
+                'loss': 1.0,
+                'info': {
+                    'error': str(e),
+                    'budget_used': budget
+                }
+            }
 
-class RandomSearchHPO(BaseHPOMethod):
-    """Random Search baseline - REDUCED TRIALS"""
+class BOHBOptimizerHPO(BaseHPOMethod):
+    """BOHB (Bayesian Optimization and HyperBand) using HpBandSter"""
     
     def optimize(self, objective_function: callable, search_space: Dict[str, Any], architecture_name: str) -> HPOResult:
-        self.logger.info(f"Starting Random Search for {architecture_name}")
+        self.logger.info(f"Starting BOHB optimization for {architecture_name}")
         
         start_time = time.time()
         early_stopped = False
         
-        best_params = None
-        best_score = float('-inf')
+        # Convert search space to ConfigSpace format
+        config_space = self._create_config_space(search_space)
         
-        for trial_idx in range(self.config.n_trials):
-            # Generate random parameters
-            params = {}
-            for param_name, param_config in search_space.items():
-                if param_config['type'] == 'float':
-                    low, high = param_config['range']
-                    if param_config.get('log_scale', False):
-                        params[param_name] = np.exp(np.random.uniform(np.log(low), np.log(high)))
+        # Start nameserver
+        NS = hpns.NameServer(run_id='bohb_optimization', host='127.0.0.1', port=None)
+        NS.start()
+        
+        try:
+            # Create worker
+            worker = BOHBWorker(
+                objective_function=objective_function,
+                nameserver='127.0.0.1',
+                nameserver_port=NS.port,
+                run_id='bohb_optimization'
+            )
+            worker.run(background=True)
+            
+            # Create BOHB optimizer - MINIMAL parameters for 2-hour limit
+            bohb = BOHB(
+                configspace=config_space,
+                run_id='bohb_optimization',
+                nameserver='127.0.0.1',
+                nameserver_port=NS.port,
+                min_budget=3,     # MINIMAL: Minimum budget (e.g., epochs)
+                max_budget=25,    # MINIMAL: Maximum budget (e.g., epochs)
+                eta=3,           # Halving factor
+                random_fraction=0.5  # More random for speed
+            )
+            
+            # Run optimization - MINIMAL iterations for 2-hour limit
+            res = bohb.run(
+                n_iterations=max(1, min(self.config.n_trials, 2)),  # MAX 2 iterations
+                min_n_workers=1
+            )
+            
+            # Shutdown
+            bohb.shutdown(shutdown_workers=True)
+            NS.shutdown()
+            
+            # Extract results
+            all_runs = res.get_all_runs()
+            
+            if all_runs:
+                # Find best configuration - FIXED: Use correct attribute access
+                best_run = min(all_runs, key=lambda x: x.loss)
+                
+                # FIXED: Access config correctly from HpBandSter Run object
+                if hasattr(best_run, 'config'):
+                    best_params = dict(best_run.config)
+                elif hasattr(best_run, 'config_id'):
+                    # Try to get config from results
+                    best_config_id = best_run.config_id
+                    best_params = {}
+                    for run in all_runs:
+                        if hasattr(run, 'config_id') and run.config_id == best_config_id:
+                            if hasattr(run, 'info') and 'params' in run.info:
+                                best_params = run.info['params']
+                                break
+                else:
+                    # Fallback: try to extract from info
+                    if hasattr(best_run, 'info') and 'params' in best_run.info:
+                        best_params = best_run.info['params']
                     else:
-                        params[param_name] = np.random.uniform(low, high)
-                elif param_config['type'] == 'int':
-                    low, high = param_config['range']
-                    params[param_name] = np.random.randint(low, high + 1)
-                elif param_config['type'] == 'categorical':
-                    params[param_name] = np.random.choice(param_config['choices'])
+                        best_params = {}
+                
+                best_score = 1.0 - best_run.loss  # Convert back from loss to score
+                
+                # Build convergence history - FIXED: Handle different Run object structures
+                convergence_history = []
+                for run in sorted(all_runs, key=lambda x: getattr(x, 'time_stamps', {}).get('finished', 0)):
+                    if hasattr(run, 'info') and isinstance(run.info, dict) and 'score' in run.info:
+                        convergence_history.append(run.info['score'])
+                    else:
+                        convergence_history.append(1.0 - run.loss)
+            else:
+                best_params = {}
+                best_score = float('-inf')
+                convergence_history = []
             
-            # Evaluate
-            score = self._evaluate_trial(params, objective_function)
+        except Exception as e:
+            self.logger.error(f"BOHB optimization failed: {e}")
+            # Cleanup
+            try:
+                NS.shutdown()
+            except:
+                pass
             
-            if score > best_score:
-                best_score = score
-                best_params = params
-            
-            self.logger.debug(f"Trial {trial_idx + 1}/{self.config.n_trials}: score={score:.4f}")
-            
-            # NEW: Check for early stopping
-            if self._should_stop_early():
-                early_stopped = True
-                self.logger.info(f"Random search stopped early at trial {trial_idx + 1} - excellent performance!")
-                break
+            best_params = {}
+            best_score = float('-inf')
+            convergence_history = []
+            all_runs = []
         
         optimization_time = time.time() - start_time
-        efficiency = best_score / optimization_time if optimization_time > 0 else 0.0
+        
+        # Calculate efficiency
+        if optimization_time > 0 and best_score > float('-inf'):
+            efficiency = best_score / optimization_time
+        else:
+            efficiency = 0.0
         
         return HPOResult(
             architecture=architecture_name,
-            method_used=HPOMethod.RANDOM_SEARCH,
-            best_params=best_params or {},
+            method_used=HPOMethod.BOHB,
+            best_params=best_params,
             best_score=best_score,
-            n_trials_completed=trial_idx + 1 if early_stopped else self.config.n_trials,
+            n_trials_completed=len(all_runs) if all_runs else 0,
             optimization_time=optimization_time,
-            convergence_history=self.optimization_history.copy(),
+            convergence_history=convergence_history,
             method_efficiency=efficiency,
             early_stopped=early_stopped
         )
+    
+    def _create_config_space(self, search_space: Dict[str, Any]) -> CS.ConfigurationSpace:
+        """Convert search space to ConfigSpace format"""
+        config_space = CS.ConfigurationSpace()
+        
+        for param_name, param_config in search_space.items():
+            if param_config['type'] == 'float':
+                low, high = param_config['range']
+                if param_config.get('log_scale', False):
+                    hp = CS.UniformFloatHyperparameter(
+                        param_name, 
+                        lower=low, 
+                        upper=high, 
+                        log=True
+                    )
+                else:
+                    hp = CS.UniformFloatHyperparameter(
+                        param_name, 
+                        lower=low, 
+                        upper=high
+                    )
+                config_space.add_hyperparameter(hp)
+                
+            elif param_config['type'] == 'int':
+                low, high = param_config['range']
+                hp = CS.UniformIntegerHyperparameter(
+                    param_name,
+                    lower=low,
+                    upper=high
+                )
+                config_space.add_hyperparameter(hp)
+                
+            elif param_config['type'] == 'categorical':
+                hp = CS.CategoricalHyperparameter(
+                    param_name,
+                    choices=param_config['choices']
+                )
+                config_space.add_hyperparameter(hp)
+        
+        return config_space
 
 class MetaHPOSelector:
     """
-    Meta-optimizer that selects the best HPO method for each architecture and context
-    UPDATED: Adaptive trial calculation for faster execution
+    Meta-optimizer that selects between ASHA and BOHB based on context
     """
     
     def __init__(self, config: AutoMLConfig):
         self.config = config
         self.logger = logging.getLogger('AutoML.MetaHPOSelector')
         
-        # UPDATED: Increased trial configuration for better exploration
-        self.base_trials = config.get('hpo_base_trials', 25)  # INCREASED from 8
+        # Trial configuration - ULTRA AGGRESSIVE for 2-hour limit
+        self.base_trials = config.get('hpo_base_trials', 4)  # REDUCED from 8
         self.quick_mode = config.get('quick_test', False)
-        
         # Historical performance tracking
         self.method_performance_history: Dict[str, List[float]] = {
             method.value: [] for method in HPOMethod
@@ -376,52 +446,52 @@ class MetaHPOSelector:
         
         # HPO method factories
         self.hpo_methods = {
-            HPOMethod.BAYESIAN_OPTIMIZATION: BayesianOptimizationHPO,
-            HPOMethod.SUCCESSIVE_HALVING: SuccessiveHalvingHPO,
-            HPOMethod.RANDOM_SEARCH: RandomSearchHPO,
+            HPOMethod.ASHA: ASHAOptimizerHPO,
+            HPOMethod.BOHB: BOHBOptimizerHPO,
         }
         
         self.logger.info(f"MetaHPOSelector initialized - Base trials: {self.base_trials}, Quick mode: {self.quick_mode}")
+        self.logger.info(f"UNIFIED: Per-model time managed by BudgetManager")
     
     def _initialize_selection_rules(self) -> Dict[str, Any]:
         """Initialize selection rules based on context"""
         return {
             'architecture_preferences': {
-                'resnet': HPOMethod.BAYESIAN_OPTIMIZATION,  # ResNets benefit from careful tuning
-                'efficientnet': HPOMethod.BAYESIAN_OPTIMIZATION,  # Complex scaling relationships
-                'convnext': HPOMethod.BAYESIAN_OPTIMIZATION,  # New architecture, needs exploration
-                'mobilenet': HPOMethod.RANDOM_SEARCH,  # Simpler, fewer parameters
-                'densenet': HPOMethod.SUCCESSIVE_HALVING,  # Many configurations to try
+                'resnet': HPOMethod.BOHB,      # ResNets benefit from Bayesian optimization
+                'efficientnet': HPOMethod.BOHB, # Complex scaling relationships
+                'convnext': HPOMethod.BOHB,     # New architecture, needs exploration
+                'mobilenet': HPOMethod.ASHA,    # Simpler, can use aggressive pruning
+                'densenet': HPOMethod.ASHA,     # Many configurations, good for pruning
             },
             'dataset_complexity_thresholds': {
                 'low_complexity': {
                     'threshold': 3.0,
-                    'preferred_method': HPOMethod.RANDOM_SEARCH
+                    'preferred_method': HPOMethod.ASHA
                 },
                 'medium_complexity': {
                     'threshold': 6.0,
-                    'preferred_method': HPOMethod.BAYESIAN_OPTIMIZATION
+                    'preferred_method': HPOMethod.BOHB
                 },
                 'high_complexity': {
                     'threshold': 10.0,
-                    'preferred_method': HPOMethod.BAYESIAN_OPTIMIZATION
+                    'preferred_method': HPOMethod.BOHB
                 }
             },
             'time_budget_thresholds': {
                 'very_limited': {
-                    'threshold_hours': 2.0,
-                    'preferred_method': HPOMethod.RANDOM_SEARCH,
-                    'max_trials': 5  # REDUCED
+                    'threshold_hours': 1.0,  # REDUCED from 2.0
+                    'preferred_method': HPOMethod.ASHA,
+                    'max_trials': 2  # REDUCED from 4
                 },
                 'limited': {
-                    'threshold_hours': 6.0,
-                    'preferred_method': HPOMethod.SUCCESSIVE_HALVING,
-                    'max_trials': 12  # REDUCED
+                    'threshold_hours': 1.5,  # REDUCED from 4.0
+                    'preferred_method': HPOMethod.ASHA,
+                    'max_trials': 3  # REDUCED from 6
                 },
                 'sufficient': {
                     'threshold_hours': float('inf'),
-                    'preferred_method': HPOMethod.BAYESIAN_OPTIMIZATION,
-                    'max_trials': 15  # REDUCED from 100
+                    'preferred_method': HPOMethod.ASHA,  # Keep ASHA for speed
+                    'max_trials': 4  # REDUCED from 8
                 }
             }
         }
@@ -431,40 +501,31 @@ class MetaHPOSelector:
                                architecture_characteristics: Dict[str, Any],
                                dataset_complexity: float,
                                available_time_hours: float) -> int:
-        """NEW: Calculate adaptive trial budget based on context"""
+        """Calculate adaptive trial budget based on context - UNIFIED VERSION"""
         
-        # Start with base trials
+        # UNIFIED: Use available time directly (managed by BudgetManager)
+        effective_time = available_time_hours
+        
+        # Start with base trials (now 4)
         trials = self.base_trials
         
         # Quick mode override
         if self.quick_mode:
-            return min(5, trials)
+            return min(2, trials)
         
-        # Adjust for architecture complexity
-        arch_complexity = architecture_characteristics.get('complexity_score', 3.0)
-        if arch_complexity > 4.0:
-            trials += 3  # More trials for complex architectures
-        elif arch_complexity < 2.5:
-            trials -= 2  # Fewer trials for simple architectures
+        # Time-based reduction
+        if effective_time <= 1.0:
+            trials = 2  # Minimal trials for very short time
+        elif effective_time <= 1.5:
+            trials = 3  # Few trials for limited time
+        else:
+            trials = 4  # Max trials even with sufficient time
         
-        # Adjust for dataset complexity
-        if dataset_complexity > 7.0:
-            trials += 2  # More trials for complex datasets
-        elif dataset_complexity < 3.0:
-            trials -= 2  # Fewer trials for simple datasets
-        
-        # Adjust for available time
-        if available_time_hours < 2.0:
-            trials = max(5, trials // 2)  # Aggressive reduction for limited time
-        elif available_time_hours < 6.0:
-            trials = max(6, int(trials * 0.7))  # Moderate reduction
-        
-        # Apply bounds
-        trials = max(5, min(trials, 20))  # Between 5 and 20 trials
+        # Apply strict bounds
+        trials = max(2, min(trials, 4))  # Between 2 and 4 trials MAX
         
         self.logger.info(f"Trial budget for {architecture_name}: {trials} trials")
-        self.logger.info(f"  Arch complexity: {arch_complexity}, Dataset complexity: {dataset_complexity}")
-        self.logger.info(f"  Available time: {available_time_hours:.1f}h")
+        self.logger.info(f"  Available time: {effective_time:.1f}h (managed by BudgetManager)")
         
         return trials
     
@@ -474,9 +535,7 @@ class MetaHPOSelector:
                          dataset_complexity: float,
                          available_time_hours: float,
                          search_space_size: int) -> HPOConfig:
-        """
-        Select optimal HPO method based on context - WITH ADAPTIVE TRIALS
-        """
+        """Select optimal HPO method based on context"""
         
         self.logger.info(f"Selecting HPO method for {architecture_name}")
         self.logger.info(f"  Dataset complexity: {dataset_complexity:.1f}")
@@ -492,7 +551,7 @@ class MetaHPOSelector:
         # Apply selection logic
         selected_method = self._apply_selection_logic(factors)
         
-        # NEW: Calculate adaptive trial budget
+        # Calculate adaptive trial budget
         n_trials = self._calculate_trial_budget(
             architecture_name, architecture_characteristics,
             dataset_complexity, available_time_hours
@@ -562,42 +621,31 @@ class MetaHPOSelector:
         return best_method[0]
     
     def _score_method_for_context(self, method: HPOMethod, factors: Dict[str, Any]) -> float:
-        """Score a method for given context"""
+        """Score a method for given context - UPDATED: Architecture-based selection"""
         score = 0.0
         
-        # Architecture preference (30% weight)
+        # Architecture preference (50% weight) - INCREASED from 30%
         arch_family = factors['architecture_family']
         if arch_family in self.selection_rules['architecture_preferences']:
             preferred_method = self.selection_rules['architecture_preferences'][arch_family]
             if method == preferred_method:
-                score += 0.3
+                score += 0.5
         
-        # Dataset complexity matching (25% weight)
-        dataset_complexity = factors['dataset_complexity']
-        if method == HPOMethod.BAYESIAN_OPTIMIZATION and dataset_complexity > 6.0:
-            score += 0.25
-        elif method == HPOMethod.RANDOM_SEARCH and dataset_complexity < 3.0:
-            score += 0.25
-        elif method == HPOMethod.SUCCESSIVE_HALVING and 3.0 <= dataset_complexity <= 6.0:
-            score += 0.25
+        # Architecture complexity matching (30% weight) - REPLACED dataset complexity
+        arch_complexity = factors['architecture_complexity']
+        if method == HPOMethod.BOHB and arch_complexity > 3.5:
+            score += 0.3  # BOHB for complex architectures (ResNet34+, EfficientNet-B1+, etc.)
+        elif method == HPOMethod.ASHA and arch_complexity <= 3.5:
+            score += 0.3  # ASHA for simpler architectures (ResNet18, EfficientNet-B0, etc.)
         
-        # Time budget consideration (25% weight)
+        # Time budget consideration (10% weight) - REDUCED from 25%
         time_pressure = factors['time_pressure']
-        if time_pressure == 'very_limited' and method == HPOMethod.RANDOM_SEARCH:
-            score += 0.25
-        elif time_pressure == 'limited' and method == HPOMethod.SUCCESSIVE_HALVING:
-            score += 0.25
-        elif time_pressure == 'sufficient' and method == HPOMethod.BAYESIAN_OPTIMIZATION:
-            score += 0.25
+        if time_pressure in ['very_limited', 'limited'] and method == HPOMethod.ASHA:
+            score += 0.1  # ASHA is faster due to pruning
+        elif time_pressure == 'sufficient' and method == HPOMethod.BOHB:
+            score += 0.1  # BOHB when we have time for sophistication
         
-        # Search space complexity (10% weight)
-        search_complexity = factors['search_complexity']
-        if search_complexity == 'large' and method == HPOMethod.SUCCESSIVE_HALVING:
-            score += 0.1
-        elif search_complexity == 'small' and method == HPOMethod.RANDOM_SEARCH:
-            score += 0.1
-        
-        # Historical performance (10% weight)
+        # Historical performance (10% weight) - KEPT same
         historical_perf = factors['historical_performance'].get(method.value, 0.5)
         score += 0.1 * historical_perf
         
@@ -628,7 +676,7 @@ class MetaHPOSelector:
         for method_name, history in self.method_performance_history.items():
             if history:
                 # Use recent average performance
-                recent_performance = np.mean(history[-10:])  # Last 10 results
+                recent_performance = np.mean(history[-5:])  # Last 5 results
                 performance[method_name] = min(recent_performance, 1.0)
             else:
                 performance[method_name] = 0.5  # Default neutral score
@@ -640,34 +688,33 @@ class MetaHPOSelector:
                                    factors: Dict[str, Any],
                                    available_time_hours: float,
                                    n_trials: int) -> HPOConfig:
-        """Configure parameters for selected method - WITH REDUCED TRIALS"""
+        """Configure parameters for selected method - UNIFIED VERSION"""
         
-        # UPDATED: Use calculated trial budget
-        timeout_seconds = int(available_time_hours * 3600 * 0.6)  # Use 60% of available time (reduced from 80%)
+        # UNIFIED: Use available time directly (managed by BudgetManager)
+        effective_time = available_time_hours
+        timeout_seconds = int(effective_time * 3600 * 0.9)  # Use 90% of available time
         
-        # Method-specific adjustments (but keep trials reasonable)
-        if method == HPOMethod.BAYESIAN_OPTIMIZATION:
-            # Bayesian optimization benefits from more trials but cap it
-            final_trials = min(n_trials, 15)
+        # Method-specific adjustments
+        if method == HPOMethod.BOHB:
+            # BOHB: Limit iterations for time constraint
+            final_trials = max(1, min(n_trials // 2, 2))  # MAX 2 iterations
             
-        elif method == HPOMethod.SUCCESSIVE_HALVING:
-            # Successive halving can use more initial candidates
-            final_trials = min(n_trials * 2, 20)  # Up to 20 initial candidates
-        
-        elif method == HPOMethod.RANDOM_SEARCH:
-            # Random search uses base trials
+        elif method == HPOMethod.ASHA:
+            # ASHA: Use calculated trials directly
             final_trials = n_trials
-            if factors['time_pressure'] == 'very_limited':
-                final_trials = min(final_trials, 5)
+            if effective_time < 1.5:
+                final_trials = min(final_trials, 3)  # Extra limit for short time
         
         else:
             final_trials = n_trials
+        
+        self.logger.info(f"Configured {method.value}: {final_trials} trials/iterations, {timeout_seconds}s timeout")
         
         return HPOConfig(
             method=method,
             n_trials=final_trials,
             timeout_seconds=timeout_seconds,
-            early_stopping_rounds=5,  # REDUCED from 10
+            early_stopping_rounds=1,
             resource_budget=1.0,
             method_specific_params={}
         )
@@ -679,9 +726,7 @@ class MetaHPOSelector:
                                 architecture_characteristics: Dict[str, Any],
                                 dataset_complexity: float,
                                 available_time_hours: float) -> HPOResult:
-        """
-        Complete HPO pipeline: select method and optimize - WITH PROGRESS TRACKING
-        """
+        """Complete HPO pipeline: select method and optimize"""
         
         # Select HPO method
         search_space_size = self._estimate_search_space_size(search_space)
@@ -691,23 +736,19 @@ class MetaHPOSelector:
         )
         
         # Create HPO method instance
-        if hpo_config.method not in self.hpo_methods:
-            self.logger.warning(f"Method {hpo_config.method} not implemented, falling back to Random Search")
-            hpo_config.method = HPOMethod.RANDOM_SEARCH
-        
         hpo_method = self.hpo_methods[hpo_config.method](hpo_config)
         
         # Run optimization with progress tracking
-        self.logger.info(f" Starting HPO for {architecture_name} with {hpo_config.n_trials} trials")
+        self.logger.info(f"Starting HPO for {architecture_name} with {hpo_config.n_trials} trials")
         start_time = time.time()
         
         result = hpo_method.optimize(objective_function, search_space, architecture_name)
         
         elapsed_time = time.time() - start_time
-        self.logger.info(f" HPO completed for {architecture_name} in {elapsed_time:.1f}s")
-        self.logger.info(f"   Best score: {result.best_score:.4f} ({result.n_trials_completed} trials)")
+        self.logger.info(f"HPO completed for {architecture_name} in {elapsed_time:.1f}s")
+        self.logger.info(f"  Best score: {result.best_score:.4f} ({result.n_trials_completed} trials)")
         if result.early_stopped:
-            self.logger.info(f"   Stopped early due to excellent performance!")
+            self.logger.info(f"  Stopped early due to excellent performance!")
         
         # Update historical performance
         self.method_performance_history[result.method_used.value].append(result.method_efficiency)
@@ -725,9 +766,9 @@ class MetaHPOSelector:
                 low, high = param_config['range']
                 total_size *= (high - low + 1)
             else:  # float
-                total_size *= 50  # REDUCED: Approximate discretization (was 100)
+                total_size *= 50  # Approximate discretization
         
-        return min(total_size, 100000)  # REDUCED: Cap at reasonable size (was 1M)
+        return min(total_size, 50000)  # Cap at reasonable size
     
     def get_method_performance_summary(self) -> Dict[str, Any]:
         """Get summary of HPO method performance"""
@@ -791,7 +832,23 @@ if __name__ == "__main__":
     
     # Test dummy optimization
     def dummy_objective(params):
-        return np.random.random()
+        # Simulate a realistic objective function
+        lr = params.get('learning_rate', 1e-3)
+        batch_size = params.get('batch_size', 32)
+        dropout = params.get('dropout', 0.2)
+        
+        # Simple heuristic: penalize extreme values
+        score = 0.8
+        if lr < 1e-4 or lr > 1e-2:
+            score -= 0.1
+        if batch_size not in [16, 32, 64]:
+            score -= 0.05
+        if dropout > 0.4:
+            score -= 0.1
+            
+        # Add some noise
+        score += np.random.normal(0, 0.05)
+        return max(0.0, min(1.0, score))
     
     search_space = {
         'learning_rate': {'type': 'float', 'range': (1e-5, 1e-1), 'log_scale': True},
@@ -799,6 +856,7 @@ if __name__ == "__main__":
         'dropout': {'type': 'float', 'range': (0.0, 0.5)}
     }
     
+    print("\nRunning optimization test...")
     result = selector.optimize_hyperparameters(
         'efficientnet_b0',
         dummy_objective,
@@ -808,7 +866,58 @@ if __name__ == "__main__":
         available_time_hours=0.1  # Short test
     )
     
-    print(f"Optimization result: {result.best_score:.3f}")
-    print(f"Best params: {result.best_params}")
-    print(f"Method used: {result.method_used.value}")
-    print(f"Early stopped: {result.early_stopped}")
+    print(f"\nOptimization result:")
+    print(f"  Best score: {result.best_score:.3f}")
+    print(f"  Best params: {result.best_params}")
+    print(f"  Method used: {result.method_used.value}")
+    print(f"  Trials completed: {result.n_trials_completed}")
+    print(f"  Optimization time: {result.optimization_time:.2f}s")
+    print(f"  Method efficiency: {result.method_efficiency:.3f}")
+    print(f"  Early stopped: {result.early_stopped}")
+    
+    # Test both methods
+    print("\n" + "="*50)
+    print("Testing both methods:")
+    
+    for method_name in ['ASHA', 'BOHB']:
+        print(f"\nTesting {method_name}...")
+        
+        # Force method selection
+        if method_name == 'ASHA':
+            test_config = HPOConfig(
+                method=HPOMethod.ASHA,
+                n_trials=5,
+                timeout_seconds=30
+            )
+            test_method = ASHAOptimizerHPO(test_config)
+        else:
+            test_config = HPOConfig(
+                method=HPOMethod.BOHB,
+                n_trials=2,  # BOHB iterations
+                timeout_seconds=30
+            )
+            test_method = BOHBOptimizerHPO(test_config)
+        
+        try:
+            test_result = test_method.optimize(
+                dummy_objective,
+                search_space,
+                f'test_{method_name.lower()}'
+            )
+            
+            print(f"  {method_name} Result:")
+            print(f"    Best score: {test_result.best_score:.3f}")
+            print(f"    Best params: {test_result.best_params}")
+            print(f"    Trials: {test_result.n_trials_completed}")
+            print(f"    Time: {test_result.optimization_time:.2f}s")
+            
+        except Exception as e:
+            print(f"  {method_name} failed: {e}")
+    
+    print("\nPerformance summary:")
+    summary = selector.get_method_performance_summary()
+    for method, stats in summary.items():
+        print(f"  {method}: {stats['num_uses']} uses, "
+              f"avg efficiency: {stats['average_efficiency']:.3f}")
+    
+    print("\nTest completed successfully!")

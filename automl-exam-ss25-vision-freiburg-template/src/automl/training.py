@@ -54,7 +54,9 @@ class Trainer:
                                 val_loader: DataLoader,
                                 model_factory: Any,
                                 early_stopping_engine: Any = None,
-                                budget_manager: Any = None) -> Callable:
+                                budget_manager: Any = None,
+                                time_enforcer: Any = None,
+                                model_timer_id: str = None) -> Callable:
         """
         Create HPO objective function for a specific architecture
         
@@ -107,24 +109,59 @@ class Trainer:
                 best_val_accuracy = 0.0
                 epoch_times = []
                 
-                # Training loop with progress bar
+                # Training loop with progress bar and STRICT TIME ENFORCEMENT
                 epoch_pbar = tqdm(range(1, epochs_to_run + 1), 
                                 desc=f"Training {architecture_name}", 
                                 unit="epoch",
-                                leave=True)
+                                leave=False,  # Don't leave progress bar after completion
+                                position=0,   # Use position 0 to avoid conflicts
+                                dynamic_ncols=True)  # Adjust to terminal width
                 
                 for epoch in epoch_pbar:
                     epoch_start_time = time.time()
+                    
+                    # SMART TIME ENFORCEMENT: Check timeout with smart completion
+                    if time_enforcer and model_timer_id:
+                        epochs_remaining = epochs_to_run - epoch + 1
+                        is_timeout, elapsed, remaining = time_enforcer.check_timeout_with_smart_completion(
+                            model_timer_id, epochs_remaining=epochs_remaining
+                        )
+                        
+                        if is_timeout:
+                            self.logger.warning(f"TIMEOUT: {architecture_name} exceeded time limit at epoch {epoch}")
+                            self.logger.warning(f"Elapsed: {elapsed/3600:.2f}h, stopping training")
+                            break
+                        
+                        # Update progress bar with time info
+                        remaining_minutes = remaining / 60
+                        if elapsed >= time_enforcer.time_config.get_timeout_seconds_per_model():
+                            epoch_pbar.set_description(f"Training {architecture_name} (BUFFER: {remaining_minutes:.1f}m left)")
+                        else:
+                            epoch_pbar.set_description(f"Training {architecture_name} (Time left: {remaining_minutes:.1f}m)")
                     
                     # Training phase
                     train_metrics = self._train_epoch(
                         model, train_loader, optimizer, criterion, epoch
                     )
                     
+                    # STRICT TIME ENFORCEMENT: Check timeout after training phase
+                    if time_enforcer and model_timer_id:
+                        is_timeout, elapsed, remaining = time_enforcer.check_timeout(model_timer_id)
+                        if is_timeout:
+                            self.logger.warning(f"TIMEOUT: {architecture_name} exceeded time limit during training phase")
+                            break
+                    
                     # Validation phase
                     val_metrics = self._validate_epoch(
                         model, val_loader, criterion, epoch
                     )
+                    
+                    # STRICT TIME ENFORCEMENT: Check timeout after validation phase
+                    if time_enforcer and model_timer_id:
+                        is_timeout, elapsed, remaining = time_enforcer.check_timeout(model_timer_id)
+                        if is_timeout:
+                            self.logger.warning(f"TIMEOUT: {architecture_name} exceeded time limit during validation phase")
+                            break
                     
                     # Update progress bar with current metrics
                     epoch_pbar.set_postfix({
@@ -191,14 +228,19 @@ class Trainer:
                             memory_used_gb=self._estimate_memory_usage(model)
                         )
                     
-                    # Log progress
+                    # Log progress with time enforcement info
                     if epoch % 5 == 0 or epoch == epochs_to_run:
+                        time_info = ""
+                        if time_enforcer and model_timer_id:
+                            _, elapsed, remaining = time_enforcer.check_timeout(model_timer_id)
+                            time_info = f", Time: {elapsed/3600:.2f}h/{remaining/3600:.2f}h left"
+                        
                         self.logger.info(
                             f"Epoch {epoch}/{epochs_to_run} - "
                             f"Train Acc: {train_metrics['accuracy']:.4f}, "
                             f"Val Acc: {val_metrics['accuracy']:.4f}, "
                             f"Val Loss: {val_metrics['loss']:.4f}, "
-                            f"Time: {epoch_time:.1f}s"
+                            f"Epoch Time: {epoch_time:.1f}s{time_info}"
                         )
                 
                 # Calculate efficiency metrics
@@ -250,6 +292,10 @@ class Trainer:
         
         for batch_idx, (images, labels) in enumerate(train_pbar):
             images, labels = images.to(self.device), labels.to(self.device)
+            
+            # Ensure correct data types
+            images = images.float()
+            labels = labels.long()
             
             # Zero gradients
             optimizer.zero_grad()
@@ -306,6 +352,10 @@ class Trainer:
         with torch.no_grad():
             for batch_idx, (images, labels) in enumerate(val_pbar):
                 images, labels = images.to(self.device), labels.to(self.device)
+                
+                # Ensure correct data types
+                images = images.float()
+                labels = labels.long()
                 
                 # Forward pass
                 outputs = model(images)
@@ -496,12 +546,65 @@ class Trainer:
         except:
             return 1.0  # Default estimate
     
+    def _get_model_num_classes(self, model: nn.Module) -> int:
+        """Get number of output classes from model"""
+        try:
+            # Common final layer names in different architectures
+            final_layer_names = ['fc', 'classifier', 'head', 'linear', 'output']
+            
+            for name in final_layer_names:
+                if hasattr(model, name):
+                    layer = getattr(model, name)
+                    if hasattr(layer, 'out_features'):
+                        return layer.out_features
+                    elif hasattr(layer, 'weight') and len(layer.weight.shape) >= 2:
+                        return layer.weight.shape[0]
+            
+            # Fallback: try to get from a forward pass with dummy input
+            model.eval()
+            with torch.no_grad():
+                # Create dummy input based on expected input size
+                dummy_input = torch.randn(1, 3, 224, 224).to(self.device)  # Standard size
+                try:
+                    output = model(dummy_input)
+                    if hasattr(output, 'shape') and len(output.shape) >= 2:
+                        return output.shape[1]  # Number of classes
+                except:
+                    pass
+            
+            # Final fallback: assume 7 classes for skin cancer dataset
+            self.logger.warning("Could not determine number of classes from model, assuming 7")
+            return 7
+            
+        except Exception as e:
+            self.logger.warning(f"Error getting model num_classes: {e}, assuming 7")
+            return 7
+    
     def evaluate_model(self, 
                       model: nn.Module,
                       test_loader: DataLoader) -> Dict[str, float]:
         """Evaluate model on test set"""
         
         self.logger.info("Evaluating model on test set...")
+        
+        # SKIN CANCER DATASET FIX: Skip test evaluation for skin cancer (competition dataset)
+        dataset_name = self.config.get('dataset_name', '')
+        if dataset_name == 'skin_cancer':
+            self.logger.info("Skin cancer dataset detected - skipping test evaluation")
+            self.logger.info("Test labels are withheld for grading purposes")
+            
+            # Return placeholder results for skin cancer
+            results = {
+                'test_loss': 0.0,
+                'test_accuracy': 0.0,
+                'total_samples': 0,
+                'correct_predictions': 0,
+                'per_class_accuracy': {},
+                'evaluation_skipped': True,
+                'reason': 'Skin cancer dataset - test labels withheld for grading'
+            }
+            
+            return results
         
         model.eval()
         criterion = nn.CrossEntropyLoss()
@@ -518,9 +621,21 @@ class Trainer:
             for images, labels in test_loader:
                 images, labels = images.to(self.device), labels.to(self.device)
                 
-                # FIX: Ensure correct data types
+                # ENHANCED FIX: Ensure correct data types and validate labels
                 images = images.float()  # Ensure float32
                 labels = labels.long()   # Ensure long (int64)
+                
+                # CRITICAL FIX: Validate label range to prevent CUDA assertion error
+                # Get number of classes from model
+                num_classes = self._get_model_num_classes(model)
+                
+                # Check for invalid labels before forward pass
+                if labels.min() < 0 or labels.max() >= num_classes:
+                    self.logger.error(f"Invalid labels detected: min={labels.min().item()}, max={labels.max().item()}")
+                    self.logger.error(f"Expected range: [0, {num_classes-1}]")
+                    self.logger.error(f"Label values: {labels.cpu().numpy()}")
+                    # Skip this batch to avoid CUDA error
+                    continue
                 
                 # Forward pass
                 outputs = model(images)

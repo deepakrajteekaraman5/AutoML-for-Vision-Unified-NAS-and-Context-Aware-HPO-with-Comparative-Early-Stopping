@@ -39,11 +39,10 @@ class AutoMLConfig:
             'results_dir': './results',
             'logs_dir': './logs',
             
-            # Time budget settings
-            'time_budget_hours': 24,
-            'architecture_search_ratio': 0.70,  # 70% for arch search
-            'final_training_ratio': 0.20,       # 20% for final training
-            'buffer_ratio': 0.10,               # 10% buffer
+            # UNIFIED TIME MANAGEMENT - Per-model time only
+            'hours_per_model': 2.0,             # ONLY time constraint (per architecture)
+            'smart_completion': True,           # Allow last epoch/trial to finish
+            'grace_period_minutes': 10,         # Grace period for smart completion
             
             # Training settings
             'min_epochs_per_architecture': 5,
@@ -116,16 +115,16 @@ class AutoMLConfig:
         self.config.update(kwargs)
     
     def enable_quick_test_mode(self):
-        """NEW: Enable quick test mode with reduced settings"""
+        """NEW: Enable quick test mode with reduced settings - UNIFIED VERSION"""
         self.config.update({
             'quick_test': True,
-            'time_budget_hours': self.config['quick_test_time_budget'],
+            'hours_per_model': self.config['quick_test_time_budget'],  # UNIFIED: Use hours_per_model
             'hpo_base_trials': self.config['quick_test_trials'],
             'max_epochs_per_architecture': self.config['quick_test_max_epochs'],
             'min_epochs_per_architecture': 3,
             'early_stopping_patience': 5,
         })
-        logging.getLogger('AutoML').info("Quick test mode enabled - reduced time budget and trials")
+        logging.getLogger('AutoML').info("Quick test mode enabled - reduced per-model time and trials")
     
     def get_quick_test_architectures(self) -> List[str]:
         """NEW: Get reduced architecture list for quick testing"""
@@ -137,15 +136,17 @@ class AutoMLConfig:
             return None
     
     def print_configuration_summary(self):
-        """NEW: Print current configuration for verification"""
+        """NEW: Print current configuration for verification - UNIFIED VERSION"""
         print("\n" + "="*60)
         print("AUTOML CONFIGURATION SUMMARY")
         print("="*60)
         print(f"Mode: {'QUICK TEST' if self.config['quick_test'] else 'FULL PIPELINE'}")
-        print(f"Time Budget: {self.config['time_budget_hours']} hours")
+        print(f"UNIFIED TIME: {self.config['hours_per_model']} hours per model (NO total limits)")
         print(f"Dataset: {self.config['dataset_name']} ({self.config['num_classes']} classes)")
         print(f"HPO Base Trials: {self.config['hpo_base_trials']}")
         print(f"Max Epochs per Architecture: {self.config['max_epochs_per_architecture']}")
+        print(f"Smart Completion: {self.config['smart_completion']}")
+        print(f"Grace Period: {self.config['grace_period_minutes']} minutes")
         print(f"Early Success Threshold: {self.config['early_success_threshold']}")
         print(f"Plotting Enabled: {self.config['enable_plotting']}")
         
@@ -501,12 +502,12 @@ if __name__ == "__main__":
     
     # Test configuration
     config = AutoMLConfig()
-    print(f"✓ Config loaded - Time budget: {config.get('time_budget_hours')} hours")
+    print(f"✓ Config loaded - Per-model time: {config.get('hours_per_model')} hours")
     print(f"✓ HPO base trials: {config.get('hpo_base_trials')}")
     
     # Test quick mode
     config.enable_quick_test_mode()
-    print(f"✓ Quick test enabled - Time budget: {config.get('time_budget_hours')} hours")
+    print(f"✓ Quick test enabled - Per-model time: {config.get('hours_per_model')} hours")
     config.print_configuration_summary()
     
     # Test logging

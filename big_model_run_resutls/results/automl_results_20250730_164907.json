@@ -1,0 +1,361 @@
+{
+  "pipeline_config": {
+    "dataset_name": "skin_cancer",
+    "time_budget_hours": 12.0,
+    "architectures_evaluated": [
+      "resnet34",
+      "efficientnet_b1"
+    ],
+    "total_execution_time_hours": 5.869041810565524
+  },
+  "dataset_analysis": {
+    "dataset_name": "skin_cancer",
+    "num_train": 5608,
+    "num_val": 1402,
+    "num_test": 3005,
+    "characteristics": {
+      "name": "skin_cancer",
+      "num_samples": 7010,
+      "num_classes": 7,
+      "image_width": 450,
+      "image_height": 450,
+      "channels": 3,
+      "image_size_pixels": 202500,
+      "is_grayscale": false,
+      "is_color": true,
+      "class_distribution": {
+        "class_counts": {
+          "2": 18,
+          "5": 64,
+          "0": 1,
+          "1": 4,
+          "4": 13
+        },
+        "num_classes_actual": 5,
+        "is_balanced": false,
+        "most_common_class": 5,
+        "least_common_class": 0
+      },
+      "complexity_score": 7.3,
+      "memory_per_sample_mb": 2.3174285888671875,
+      "recommended_batch_size": 4,
+      "analysis_time": 0.10373616218566895
+    },
+    "setup_time": 6.922398090362549
+  },
+  "architecture_search_results": {
+    "resnet34": {
+      "hpo_method_used": "bohb",
+      "best_score": 0.7097004279600571,
+      "best_hyperparameters": {
+        "batch_size": 16,
+        "dropout_rate": 0.2312503447234728,
+        "learning_rate": 0.00085323125573363,
+        "lr_scheduler": "cosine",
+        "max_epochs": 18,
+        "momentum": 0.9133822506056942,
+        "optimizer": "sgd",
+        "pretrained": true,
+        "weight_decay": 0.00018998183068196273
+      },
+      "trials_completed": 6,
+      "optimization_time": 10466.40122795105,
+      "efficiency": 6.780749299623318e-05
+    },
+    "efficientnet_b1": {
+      "hpo_method_used": "bohb",
+      "best_score": 0.7510699001426534,
+      "best_hyperparameters": {
+        "batch_size": 16,
+        "dropout_rate": 0.2894018951302011,
+        "learning_rate": 8.269624508482515e-05,
+        "lr_scheduler": "cosine",
+        "max_epochs": 33,
+        "optimizer": "rmsprop",
+        "pretrained": true,
+        "weight_decay": 7.424297082923565e-05
+      },
+      "trials_completed": 6,
+      "optimization_time": 10648.808727741241,
+      "efficiency": 7.053088465999385e-05
+    }
+  },
+  "final_training_results": {},
+  "best_model": {
+    "architecture": null,
+    "test_accuracy": 0.0,
+    "hyperparameters": {}
+  },
+  "budget_summary": {
+    "execution_status": {
+      "phase": "final_training",
+      "elapsed_hours": 5.867096701065699,
+      "remaining_hours": 18.132903298934302,
+      "phase_remaining_hours": 4.800000000000001,
+      "budget_utilization": 0.24446236254440412,
+      "is_budget_exhausted": false
+    },
+    "architecture_statistics": {
+      "total_architectures": 4,
+      "active": 0,
+      "completed": 2,
+      "stopped_early": 2,
+      "active_list": [],
+      "completed_list": [
+        "resnet34",
+        "efficientnet_b1"
+      ],
+      "stopped_list": [
+        "resnet34",
+        "efficientnet_b1"
+      ]
+    },
+    "resource_usage": {
+      "total_memory_used_gb": 0.4576988220214844,
+      "max_memory_gb": 16,
+      "memory_utilization": 0.028606176376342773,
+      "parallel_limit": 4
+    },
+    "performance_metrics": {
+      "best_performance": 0.7510699001426534,
+      "average_efficiency": 1.746676353886881,
+      "performance_rankings": [
+        [
+          "efficientnet_b1",
+          0.7510699001426534
+        ],
+        [
+          "resnet34",
+          0.7097004279600571
+        ],
+        [
+          "convnext_tiny",
+          0.0
+        ],
+        [
+          "densenet121",
+          0.0
+        ]
+      ],
+      "total_reallocations": 4
+    },
+    "phase_breakdown": {
+      "architecture_search_hours": 16.799999999999997,
+      "final_training_hours": 4.800000000000001,
+      "buffer_hours": 2.4000000000000004,
+      "total_budget_hours": 24.0
+    }
+  },
+  "early_stopping_summary": {
+    "active_architectures": [
+      "convnext_tiny",
+      "densenet121"
+    ],
+    "stopped_architectures": [
+      "resnet34",
+      "efficientnet_b1"
+    ],
+    "stopping_history": [
+      {
+        "timestamp": 1753873032.9312203,
+        "architecture": "resnet34",
+        "epoch": 14,
+        "reason": "time_budget_exceeded",
+        "confidence": 1.0,
+        "final_metrics": {
+          "val_accuracy": 0.702567760342368,
+          "val_loss": 1.156874653965532
+        }
+      },
+      {
+        "timestamp": 1753876298.5737963,
+        "architecture": "resnet34",
+        "epoch": 14,
+        "reason": "time_budget_exceeded",
+        "confidence": 1.0,
+        "final_metrics": {
+          "val_accuracy": 0.702567760342368,
+          "val_loss": 1.156874653965532
+        }
+      },
+      {
+        "timestamp": 1753883499.4020321,
+        "architecture": "efficientnet_b1",
+        "epoch": 9,
+        "reason": "time_budget_exceeded",
+        "confidence": 1.0,
+        "final_metrics": {
+          "val_accuracy": 0.7082738944365192,
+          "val_loss": 0.89061114082625
+        }
+      },
+      {
+        "timestamp": 1753886947.412272,
+        "architecture": "efficientnet_b1",
+        "epoch": 9,
+        "reason": "time_budget_exceeded",
+        "confidence": 1.0,
+        "final_metrics": {
+          "val_accuracy": 0.7082738944365192,
+          "val_loss": 0.89061114082625
+        }
+      }
+    ],
+    "current_rankings": {
+      "val_loss": [
+        [
+          "resnet34",
+          1.1536920524811671
+        ],
+        [
+          "efficientnet_b1",
+          0.9524017112200914
+        ]
+      ],
+      "val_accuracy": [
+        [
+          "efficientnet_b1",
+          0.7077983832620066
+        ],
+        [
+          "resnet34",
+          0.7004279600570613
+        ]
+      ]
+    },
+    "total_comparisons": 0
+  },
+  "hpo_method_performance": {
+    "asha": {
+      "num_uses": 0,
+      "average_efficiency": 0.0,
+      "recent_efficiency": 0.0,
+      "improvement_trend": "no_data"
+    },
+    "bohb": {
+      "num_uses": 2,
+      "average_efficiency": 6.916918882811352e-05,
+      "recent_efficiency": 6.916918882811352e-05,
+      "improvement_trend": "improving"
+    }
+  },
+  "execution_log": [
+    {
+      "phase": "dataset_preparation",
+      "duration_seconds": 6.922398090362549,
+      "dataset_info": {
+        "dataset_name": "skin_cancer",
+        "num_train": 5608,
+        "num_val": 1402,
+        "num_test": 3005,
+        "characteristics": {
+          "name": "skin_cancer",
+          "num_samples": 7010,
+          "num_classes": 7,
+          "image_width": 450,
+          "image_height": 450,
+          "channels": 3,
+          "image_size_pixels": 202500,
+          "is_grayscale": false,
+          "is_color": true,
+          "class_distribution": {
+            "class_counts": {
+              "2": 18,
+              "5": 64,
+              "0": 1,
+              "1": 4,
+              "4": 13
+            },
+            "num_classes_actual": 5,
+            "is_balanced": false,
+            "most_common_class": 5,
+            "least_common_class": 0
+          },
+          "complexity_score": 7.3,
+          "memory_per_sample_mb": 2.3174285888671875,
+          "recommended_batch_size": 4,
+          "analysis_time": 0.10373616218566895
+        },
+        "setup_time": 6.922398090362549
+      }
+    },
+    {
+      "phase": "architecture_selection",
+      "duration_seconds": 0.07999610900878906,
+      "selected_architectures": [
+        "resnet34",
+        "efficientnet_b1",
+        "convnext_tiny",
+        "densenet121"
+      ],
+      "time_budget_info": {
+        "architecture_search_hours": 8.0,
+        "final_training_hours": 2.0,
+        "buffer_hours": 2.0,
+        "total_hours": 12.0,
+        "max_hours_per_model": 2.0
+      }
+    },
+    {
+      "phase": "architecture_search",
+      "duration_seconds": 21121.548123836517,
+      "architecture_results": {
+        "resnet34": {
+          "best_score": 0.7097004279600571,
+          "method_used": "bohb",
+          "n_trials": 6
+        },
+        "efficientnet_b1": {
+          "best_score": 0.7510699001426534,
+          "method_used": "bohb",
+          "n_trials": 6
+        }
+      }
+    },
+    {
+      "phase": "final_training",
+      "duration_seconds": 0.0,
+      "final_candidates": [
+        "convnext_tiny",
+        "densenet121"
+      ],
+      "best_architecture": null,
+      "best_test_accuracy": 0.0
+    },
+    {
+      "phase": "results_analysis",
+      "duration_seconds": 0.0052907466888427734
+    }
+  ],
+  "decision_log": [
+    {
+      "type": "early_stopping",
+      "architecture": "resnet34",
+      "reason": "time_budget_exceeded",
+      "confidence": 1.0,
+      "freed_time_hours": 4.014196060034963
+    },
+    {
+      "type": "early_stopping",
+      "architecture": "efficientnet_b1",
+      "reason": "time_budget_exceeded",
+      "confidence": 1.0,
+      "freed_time_hours": 4.011770667566193
+    }
+  ],
+  "insights": {
+    "dataset_insights": [
+      "High complexity dataset - sophisticated models recommended"
+    ],
+    "architecture_insights": [
+      "Best performing architecture: efficientnet_b1 (0.7511)"
+    ],
+    "hpo_insights": [
+      "Most frequently selected HPO method: bohb"
+    ],
+    "recommendations": [
+      "Consider ensemble methods for further improvement",
+      "Experiment with advanced augmentation strategies"
+    ]
+  }
+}
